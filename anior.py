@@ -41,6 +41,9 @@ class Config:
         '.rm', '.rmvb',                          # RealMedia（参考项目支持）
     ]
     
+    # 字幕文件格式
+    SUBTITLE_EXTENSIONS = ['.srt', '.ass', '.ssa', '.sub', '.idx', '.vtt']
+
     DEFAULT = {
         'source_dir': '',           # 源目录
         'target_dir': '',           # 目标目录
@@ -1910,7 +1913,7 @@ class MainWindow(QMainWindow):
                     unmatched_videos = [v for v in all_videos if v not in matched_paths]
                     extras_files.extend(unmatched_videos)
 
-        # 3. 处理季度文件（重命名）
+        # 3. 处理季度文件（重命名 + 字幕）
         for src, ep_key in self.file_mappings.items():
             if not src.exists():
                 fail += 1
@@ -1922,20 +1925,45 @@ class MainWindow(QMainWindow):
             s_num = int(ep_key[1:3])
             folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
             dst = folder / f"{ep_key} - {src.name}"
+            
+            # 处理视频文件
             if FileOperator.operate(src, dst, mode):
                 success += 1
             else:
                 fail += 1
+                continue
+            
+            # 处理同名字幕文件（相同文件名，不同扩展名）
+            for sub_ext in Config.SUBTITLE_EXTENSIONS:
+                sub_src = src.with_suffix(sub_ext)
+                if sub_src.exists():
+                    sub_dst = folder / f"{ep_key} - {sub_src.name}"
+                    if FileOperator.operate(sub_src, sub_dst, mode):
+                        success += 1
+                    else:
+                        fail += 1
 
         # 4. 处理所有 extras 文件（不重命名）
         extras_folder = target_path / f"{tv_name} ({year})" / "extras"
         extras_folder.mkdir(parents=True, exist_ok=True)
 
+        processed_subs = set()  # 记录已处理的字幕文件，避免重复
+        
         for src in extras_files:
             if src.exists():
                 dst = extras_folder / src.name
                 if FileOperator.operate(src, dst, mode):
                     success += 1
+                    # 处理同名字幕文件
+                    for sub_ext in Config.SUBTITLE_EXTENSIONS:
+                        sub_src = src.with_suffix(sub_ext)
+                        if sub_src.exists() and sub_src not in processed_subs:
+                            sub_dst = extras_folder / sub_src.name
+                            if FileOperator.operate(sub_src, sub_dst, mode):
+                                success += 1
+                                processed_subs.add(sub_src)
+                            else:
+                                fail += 1
                 else:
                     fail += 1
 
