@@ -532,6 +532,33 @@ class VideoTreeItem(QTreeWidgetItem):
         return self.text(column).lower() < other.text(column).lower()
 
 
+class FolderTreeItem(QTreeWidgetItem):
+    """支持数值排序的文件夹列表项"""
+    def __lt__(self, other):
+        """自定义比较：按 UserRole 数值排序"""
+        column = self.treeWidget().header().sortIndicatorSection()
+        
+        # 获取 UserRole 数据
+        self_data = self.data(column, Qt.UserRole)
+        other_data = other.data(column, Qt.UserRole)
+        
+        # 如果都有数值数据，按数值比较
+        if self_data is not None and other_data is not None:
+            if isinstance(self_data, (int, float)) and isinstance(other_data, (int, float)):
+                return self_data < other_data
+        
+        # 否则按文本比较
+        return self.text(column).lower() < other.text(column).lower()
+
+
+class FolderTreeWidget(QTreeWidget):
+    """支持排序的文件夹列表"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSortingEnabled(True)
+        self.header().setSectionsClickable(True)
+
+
 class VideoTreeWidget(QTreeWidget):
     """支持拖放的视频列表"""
     def __init__(self, parent=None):
@@ -1099,18 +1126,8 @@ class MainWindow(QMainWindow):
         # 文件夹
         folder_group = QGroupBox("📁 动漫文件夹")
         folder_layout = QVBoxLayout(folder_group)
-        sort_row = QHBoxLayout()
-        sort_row.addWidget(QLabel("排序:"))
-        self.folder_sort = QComboBox()
-        self.folder_sort.addItem("按名称", "name")
-        self.folder_sort.addItem("按日期", "mtime")
-        self.folder_sort.addItem("按大小", "size")
-        self.folder_sort.currentIndexChanged.connect(self.load_anime_folders)
-        sort_row.addWidget(self.folder_sort)
-        sort_row.addStretch()
-        folder_layout.addLayout(sort_row)
 
-        self.folder_tree = QTreeWidget()
+        self.folder_tree = FolderTreeWidget()
         self.folder_tree.setHeaderLabels(["文件夹", "文件数", "日期"])
         self.folder_tree.header().setStretchLastSection(False)
         self.folder_tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
@@ -1270,18 +1287,6 @@ class MainWindow(QMainWindow):
 
         self.folder_tree.clear()
         folders = [d for d in source_path.iterdir() if d.is_dir()]
-        sort_mode = self.folder_sort.currentData()
-
-        # 排序逻辑
-        if sort_mode == 'name':
-            folders.sort(key=lambda x: x.name.lower())
-        elif sort_mode == 'mtime':
-            folders.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        elif sort_mode == 'size':
-            # 按文件夹总大小排序
-            def get_folder_size(f):
-                return sum(file.stat().st_size for file in f.rglob('*') if file.is_file())
-            folders.sort(key=lambda x: get_folder_size(x), reverse=True)
 
         # 批量 UI 更新
         self.folder_tree.setUpdatesEnabled(False)
@@ -1289,7 +1294,7 @@ class MainWindow(QMainWindow):
         from datetime import datetime
         items_to_add = []
         for folder in folders:
-            item = QTreeWidgetItem()
+            item = FolderTreeItem()
             item.setText(0, folder.name)
 
             # 使用缓存统计视频文件
@@ -1298,8 +1303,11 @@ class MainWindow(QMainWindow):
             total_count = len(all_video_files)
 
             item.setText(1, f"{matched_count}/{total_count}")
-            item.setText(2, datetime.fromtimestamp(folder.stat().st_mtime).strftime('%Y-%m-%d %H:%M'))
-            item.setData(2, Qt.UserRole, folder.stat().st_mtime)
+            item.setData(1, Qt.UserRole, total_count)  # 存储总数用于排序
+            
+            date_timestamp = folder.stat().st_mtime
+            item.setText(2, datetime.fromtimestamp(date_timestamp).strftime('%Y-%m-%d %H:%M'))
+            item.setData(2, Qt.UserRole, date_timestamp)  # 存储时间戳用于排序
             item.setData(0, Qt.UserRole, folder)
 
             # 如果所有视频都已匹配，用绿色标注
@@ -1309,15 +1317,18 @@ class MainWindow(QMainWindow):
             # 添加子文件夹（可折叠）
             subfolders = [d for d in folder.iterdir() if d.is_dir()]
             for sub in subfolders:
-                child = QTreeWidgetItem()
+                child = FolderTreeItem()
                 child.setText(0, "  📁 " + sub.name)
 
                 sub_video_files = self._get_folder_videos(sub)
                 sub_matched = sum(1 for f in sub_video_files if f in matched_files)
 
                 child.setText(1, f"{sub_matched}/{len(sub_video_files)}")
-                child.setText(2, datetime.fromtimestamp(sub.stat().st_mtime).strftime('%Y-%m-%d %H:%M'))
-                child.setData(2, Qt.UserRole, sub.stat().st_mtime)
+                child.setData(1, Qt.UserRole, len(sub_video_files))  # 存储总数用于排序
+                
+                sub_date_timestamp = sub.stat().st_mtime
+                child.setText(2, datetime.fromtimestamp(sub_date_timestamp).strftime('%Y-%m-%d %H:%M'))
+                child.setData(2, Qt.UserRole, sub_date_timestamp)  # 存储时间戳用于排序
                 child.setData(0, Qt.UserRole, sub)
 
                 is_sub_matched = len(sub_video_files) > 0 and sub_matched == len(sub_video_files)
