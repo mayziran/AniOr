@@ -20,6 +20,12 @@
 
 ## 安装与运行
 
+### 方法一：下载可执行文件（推荐）
+
+从 [Releases](https://github.com/mayziran/AniOr/releases) 页面下载最新的 `AniOr.exe`，双击即可运行。
+
+### 方法二：源码运行
+
 ```bash
 # 安装依赖
 pip install -r requirements.txt
