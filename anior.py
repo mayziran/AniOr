@@ -16,7 +16,8 @@ from PyQt5.QtWidgets import (
     QSplitter, QTreeWidget, QTreeWidgetItem, QGroupBox, QLabel,
     QPushButton, QLineEdit, QFileDialog, QMessageBox, QFrame,
     QScrollArea, QHeaderView, QStatusBar, QCheckBox, QComboBox,
-    QDialog, QDialogButtonBox, QFormLayout, QTabWidget, QSizePolicy
+    QDialog, QDialogButtonBox, QFormLayout, QTabWidget, QSizePolicy,
+    QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl, QSettings, QByteArray
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices
@@ -611,6 +612,211 @@ class VideoTreeWidget(QTreeWidget):
             drag.exec_(Qt.CopyAction)
 
 
+# ==================== extras 标签页 ====================
+class ExtrasTab(QWidget):
+    """extras 标签页 - 用于放置未匹配/特典文件"""
+    def __init__(self, parent=None):
+        super().__init__()
+        self.parent_window = parent
+        self.file_mappings = {}  # {path: "extras"}
+        self.setAcceptDrops(True)  # 启用拖放
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        
+        # 提示说明
+        tip = QLabel("💡 拖放视频文件到此处，整理时会移动到 extras 文件夹（保留原文件名）")
+        tip.setStyleSheet("color: #666; font-size: 12px; padding: 4px; background-color: #f0f8ff; border-radius: 4px;")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+        
+        # 文件列表
+        self.file_list = QTreeWidget()
+        self.file_list.setHeaderLabels(["文件名", "大小", "操作"])
+        self.file_list.header().setStretchLastSection(False)
+        self.file_list.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.file_list.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.file_list.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.file_list.setMinimumHeight(150)
+        self.file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)  # 支持多选（Ctrl/Shift）
+        self.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(self.show_context_menu)
+        layout.addWidget(self.file_list, 1)  # stretch=1 占满剩余空间
+        
+        # 底部按钮行
+        btn_layout = QHBoxLayout()
+        
+        clear_btn = QPushButton("🗑️ 清空所有")
+        clear_btn.setFixedHeight(30)
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
+        clear_btn.clicked.connect(self.clear_all)
+        btn_layout.addWidget(clear_btn)
+        
+        remove_btn = QPushButton("🗑️ 移除选中")
+        remove_btn.setFixedHeight(30)
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff9800;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #f57c00;
+            }
+        """)
+        remove_btn.clicked.connect(self.remove_selected)
+        btn_layout.addWidget(remove_btn)
+        
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+    
+    def show_context_menu(self, pos):
+        """显示右键菜单"""
+        item = self.file_list.itemAt(pos)
+        if item:
+            menu = self.file_list.createStandardContextMenu()
+            
+            # 如果选中了多个，添加批量移除选项
+            selected_count = len(self.file_list.selectedItems())
+            if selected_count > 1:
+                remove_action = menu.addAction(f"🗑️ 移除选中的 {selected_count} 个文件")
+            else:
+                remove_action = menu.addAction("🗑️ 移除")
+            
+            action = menu.exec_(self.file_list.mapToGlobal(pos))
+            if action == remove_action:
+                self.remove_selected()
+    
+    def add_files(self, paths: List[Path]):
+        """添加文件到 extras"""
+        added = 0
+        for path in paths:
+            # 验证文件存在性
+            if not path.exists():
+                continue
+            if path not in self.file_mappings:
+                self.file_mappings[path] = "extras"
+                item = QTreeWidgetItem()
+                item.setText(0, path.name)
+                try:
+                    size_mb = path.stat().st_size / 1024 / 1024
+                    item.setText(1, f"{size_mb:.1f} MB")
+                except:
+                    item.setText(1, "未知")
+                item.setData(0, Qt.UserRole, path)
+                self.file_list.addTopLevelItem(item)
+
+                # 添加移除按钮
+                btn = QPushButton("❌")
+                btn.setFixedSize(24, 24)
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #f44336;
+                        color: white;
+                        border-radius: 12px;
+                        font-weight: bold;
+                        font-size: 14px;
+                    }
+                    QPushButton:hover {
+                        background-color: #d32f2f;
+                    }
+                """)
+                btn.clicked.connect(lambda checked, p=path: self.remove_file(p))
+                self.file_list.setItemWidget(item, 2, btn)
+                added += 1
+
+        if added > 0 and self.parent_window:
+            self.parent_window._update_status()
+            self.parent_window._refresh_video_highlight()
+    
+    def remove_file(self, path: Path):
+        """移除指定文件"""
+        if path in self.file_mappings:
+            del self.file_mappings[path]
+        # 查找并移除 item
+        for i in range(self.file_list.topLevelItemCount()):
+            item = self.file_list.topLevelItem(i)
+            if item.data(0, Qt.UserRole) == path:
+                self.file_list.takeTopLevelItem(i)
+                break
+        if self.parent_window:
+            self.parent_window._update_status()
+            self.parent_window._refresh_video_highlight()
+    
+    def remove_item(self, item):
+        """移除单个文件"""
+        path = item.data(0, Qt.UserRole)
+        if path and path in self.file_mappings:
+            del self.file_mappings[path]
+        self.file_list.takeTopLevelItem(self.file_list.indexOfTopLevelItem(item))
+        if self.parent_window:
+            self.parent_window._update_status()
+            self.parent_window._refresh_video_highlight()
+    
+    def remove_selected(self):
+        """移除选中的文件"""
+        for item in self.file_list.selectedItems():
+            self.remove_item(item)
+    
+    def clear_all(self):
+        """清空所有 extras 文件"""
+        self.file_mappings.clear()
+        self.file_list.clear()
+        if self.parent_window:
+            self.parent_window._update_status()
+            self.parent_window._refresh_video_highlight()
+    
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """拖放进入"""
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat('application/x-video-files'):
+            event.acceptProposedAction()
+            # 视觉反馈：改变背景色
+            self.file_list.setStyleSheet("QTreeWidget { border: 2px solid #2196F3; background-color: #e3f2fd; }")
+
+    def dragLeaveEvent(self, event):
+        """拖放离开"""
+        # 恢复原始样式
+        self.file_list.setStyleSheet("")
+
+    def dropEvent(self, event: QDropEvent):
+        """拖放完成"""
+        # 恢复原始样式
+        self.file_list.setStyleSheet("")
+        
+        try:
+            paths = []
+            if event.mimeData().hasUrls():
+                for url in event.mimeData().urls():
+                    path = Path(url.toLocalFile())
+                    if self.parent_window:
+                        if path.suffix.lower() in self.parent_window._video_extensions:
+                            paths.append(path)
+            elif event.mimeData().hasFormat('application/x-video-files'):
+                data = event.mimeData().data('application/x-video-files')
+                for line in bytes(data).split(b'\n'):
+                    if line:
+                        paths.append(Path(line.decode('utf-8')))
+
+            if paths:
+                self.add_files(paths)
+        except Exception as e:
+            import traceback
+            print(f"extras drop error: {e}")
+            print(traceback.format_exc())
+
+
 # ==================== 季度页面 ====================
 class SeasonTab(QWidget):
     def __init__(self, season_num: int, season_name: str, episode_count: int, tmdb: TMDBClient, tv_id: int, parent_window=None):
@@ -917,10 +1123,6 @@ class SeasonTab(QWidget):
             self.parent_window.refresh_folder_counts()
             self.parent_window._refresh_video_highlight()
             self.parent_window.statusBar.showMessage(f"已匹配 {sum(len(tab.file_mappings) for tab in self.parent_window.season_tabs.values())} 个文件")
-
-    def setup_batch_drop(self, main_window):
-        """设置批量拖放 - batch_drop 已经在 __init__ 中创建"""
-        pass  # 不需要额外设置
 
     def handle_batch_drop(self, event, drop_type: str = "add"):
         """处理批量拖放 - 只在批量模式下生效"""
@@ -1258,6 +1460,8 @@ class MainWindow(QMainWindow):
         scroll_content = QWidget()
         self.season_tabs_widget = QTabWidget()
         self.season_tabs_widget.setVisible(False)
+        self.season_tabs = {}  # 季度标签页字典
+        self.extras_tab = None  # extras 标签页
 
         content_layout = QVBoxLayout(scroll_content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -1384,10 +1588,13 @@ class MainWindow(QMainWindow):
             # 主文件夹：只加载根目录下的视频（不包含子文件夹）
             videos = sorted([f for f in folder.glob('*') if f.is_file() and f.suffix.lower() in self._video_extensions], key=lambda x: x.name)
 
-        # 从所有季度收集已匹配的文件
+        # 从所有季度和 extras 收集已匹配的文件
         matched_files = set()
         for tab in self.season_tabs.values():
             matched_files.update(tab.file_mappings.keys())
+        # 加上 extras 标签页
+        if self.extras_tab:
+            matched_files.update(self.extras_tab.file_mappings.keys())
 
         # 批量 UI 更新
         self.video_list.setUpdatesEnabled(False)
@@ -1458,6 +1665,10 @@ class MainWindow(QMainWindow):
             self.season_tabs_widget.clear()
             self.season_tabs.clear()
             self.file_mappings.clear()
+            
+            # 先添加 extras 标签页（始终在第一个）
+            self.extras_tab = ExtrasTab(self)
+            self.season_tabs_widget.addTab(self.extras_tab, "📦 extras")
 
             tv_id = self.tv_info.get('id')
             seasons = self.tv_info.get('seasons', [])
@@ -1468,7 +1679,6 @@ class MainWindow(QMainWindow):
                 count = season.get('episode_count', 0)
 
                 tab = SeasonTab(num, name, count, self.tmdb, tv_id, self)  # 传入主窗口引用
-                tab.setup_batch_drop(self)  # 传入主窗口引用
                 self.season_tabs[num] = tab
                 self.season_tabs_widget.addTab(tab, f"S{num} ({count}集)")
 
@@ -1490,6 +1700,9 @@ class MainWindow(QMainWindow):
 
     def _update_status(self):
         total = sum(len(tab.file_mappings) for tab in self.season_tabs.values())
+        # 加上 extras 标签页的文件
+        if self.extras_tab:
+            total += len(self.extras_tab.file_mappings)
         self.statusBar.showMessage(f"已匹配 {total} 个文件")
         # 刷新文件夹计数和颜色
         self.refresh_folder_counts()
@@ -1501,6 +1714,9 @@ class MainWindow(QMainWindow):
         matched_files = set()
         for tab in self.season_tabs.values():
             matched_files.update(tab.file_mappings.keys())
+        # 加上 extras 标签页
+        if self.extras_tab:
+            matched_files.update(self.extras_tab.file_mappings.keys())
 
         # 批量 UI 更新
         self.folder_tree.setUpdatesEnabled(False)
@@ -1547,6 +1763,9 @@ class MainWindow(QMainWindow):
         matched_files = set()
         for tab in self.season_tabs.values():
             matched_files.update(tab.file_mappings.keys())
+        # 加上 extras 标签页
+        if self.extras_tab:
+            matched_files.update(self.extras_tab.file_mappings.keys())
 
         # 禁用排序和更新，防止修改文本时 Qt 重新排序导致高亮错位
         self.video_list.setUpdatesEnabled(False)
@@ -1580,9 +1799,13 @@ class MainWindow(QMainWindow):
         self.file_mappings.clear()
         for tab in self.season_tabs.values():
             self.file_mappings.update(tab.file_mappings)
+        
+        # 添加 extras 标签页的文件
+        if self.extras_tab:
+            self.file_mappings.update(self.extras_tab.file_mappings)
 
         if not self.file_mappings:
-            QMessageBox.warning(self, "警告", "请先拖放文件到季度区域")
+            QMessageBox.warning(self, "警告", "请先拖放文件到季度区域或 extras")
             return
 
         target = self.config.get('target_dir')
@@ -1601,10 +1824,19 @@ class MainWindow(QMainWindow):
         year = (self.tv_info.get('first_air_date', '') or '')[:4]
 
         success, fail = 0, 0
+        extras_files = []  # 收集 extras 标签页的文件
+        
         for src, ep_key in self.file_mappings.items():
             if not src.exists():
                 fail += 1
                 continue
+            
+            # extras 标签页的文件直接收集，不重命名
+            if ep_key == "extras":
+                extras_files.append(src)
+                continue
+            
+            # 季度文件：重命名并移动到对应季度文件夹
             s_num = int(ep_key[1:3])
             folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
             dst = folder / f"{ep_key} - {src.name}"
@@ -1612,42 +1844,53 @@ class MainWindow(QMainWindow):
                 success += 1
             else:
                 fail += 1
-
-        # 处理未匹配的文件（移动到 extras 文件夹）
-        # 逻辑：找到已匹配文件所在的动漫文件夹（源目录的子目录），处理整个动漫文件夹
+        
+        # 处理 extras 文件（包括 extras 标签页和自动 extras）
+        extras_folder = target_path / f"{tv_name} ({year})" / "extras"
+        
+        # 1. 处理 extras 标签页的文件（保留原文件名）
+        for src in extras_files:
+            if src.exists():
+                dst = extras_folder / src.name
+                if FileOperator.operate(src, dst, mode):
+                    success += 1
+                else:
+                    fail += 1
+        
+        # 2. 处理未匹配的文件（如果开启了 auto_extras）
         if self.config.get('auto_extras', True):
-            matched_files = list(self.file_mappings.keys())
-            if matched_files:
-                # 获取源目录
-                source_dir = Path(self.config.get('source_dir', ''))
-                if source_dir.exists():
-                    # 找到每个已匹配文件所属的动漫文件夹（源目录的直接子目录）
-                    anime_folders = set()
-                    for f in matched_files:
-                        try:
-                            relative = f.relative_to(source_dir)
-                            anime_folder = source_dir / relative.parts[0]
-                            anime_folders.add(anime_folder)
-                        except ValueError:
-                            continue
+            # 获取源目录
+            source_dir = Path(self.config.get('source_dir', ''))
+            if source_dir.exists():
+                # 找到每个已匹配文件所属的动漫文件夹（源目录的直接子目录）
+                anime_folders = set()
+                for f in self.file_mappings.keys():
+                    try:
+                        relative = f.relative_to(source_dir)
+                        anime_folder = source_dir / relative.parts[0]
+                        anime_folders.add(anime_folder)
+                    except ValueError:
+                        continue
 
-                    # 处理每个动漫文件夹
-                    for anime_folder in anime_folders:
-                        all_videos = self._get_folder_videos(anime_folder)
-                        # 兼容 Python 3.8+
-                        matched_paths = set(f for f in matched_files if str(f).startswith(str(anime_folder)))
-                        unmatched_videos = [v for v in all_videos if v not in matched_paths]
+                # 处理每个动漫文件夹
+                for anime_folder in anime_folders:
+                    all_videos = self._get_folder_videos(anime_folder)
+                    # 已匹配的文件（不包括 extras 标签页的）
+                    matched_paths = set(
+                        f for f in self.file_mappings.keys()
+                        if str(f).startswith(str(anime_folder)) and self.file_mappings[f] != "extras"
+                    )
+                    unmatched_videos = [v for v in all_videos if v not in matched_paths]
 
-                        if unmatched_videos:
-                            extras_folder = target_path / f"{tv_name} ({year})" / "extras"
-                            extras_folder.mkdir(parents=True, exist_ok=True)
-                            for src in unmatched_videos:
-                                if src.exists():
-                                    dst = extras_folder / src.name
-                                    if FileOperator.operate(src, dst, mode):
-                                        success += 1
-                                    else:
-                                        fail += 1
+                    if unmatched_videos:
+                        extras_folder.mkdir(parents=True, exist_ok=True)
+                        for src in unmatched_videos:
+                            if src.exists():
+                                dst = extras_folder / src.name
+                                if FileOperator.operate(src, dst, mode):
+                                    success += 1
+                                else:
+                                    fail += 1
 
         QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
         self.file_mappings.clear()
