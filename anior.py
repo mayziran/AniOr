@@ -1932,32 +1932,52 @@ class MainWindow(QMainWindow):
             else:
                 fail += 1
                 continue
+
+            # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
+            # 例如：视频名.mkv → 视频名.ass、视频名.chs.ass、视频名.jpn.ass 等
+            video_filename = src.stem
+            video_parent = src.parent
             
-            # 处理同名字幕文件（相同文件名，不同扩展名）
-            for sub_ext in Config.SUBTITLE_EXTENSIONS:
-                sub_src = src.with_suffix(sub_ext)
-                if sub_src.exists():
-                    sub_dst = folder / f"{ep_key} - {sub_src.name}"
-                    if FileOperator.operate(sub_src, sub_dst, mode):
-                        success += 1
-                    else:
-                        fail += 1
+            # 先收集关联文件（避免遍历时修改目录）
+            sub_files_to_move = []
+            for f in video_parent.iterdir():
+                if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
+                    if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                        sub_files_to_move.append(f)
+            
+            # 处理字幕文件
+            for sub_src in sub_files_to_move:
+                sub_dst = folder / f"{ep_key} - {sub_src.name}"
+                if FileOperator.operate(sub_src, sub_dst, mode):
+                    success += 1
+                else:
+                    fail += 1
 
         # 4. 处理所有 extras 文件（不重命名）
         extras_folder = target_path / f"{tv_name} ({year})" / "extras"
         extras_folder.mkdir(parents=True, exist_ok=True)
 
         processed_subs = set()  # 记录已处理的字幕文件，避免重复
-        
+
         for src in extras_files:
             if src.exists():
                 dst = extras_folder / src.name
                 if FileOperator.operate(src, dst, mode):
                     success += 1
-                    # 处理同名字幕文件
-                    for sub_ext in Config.SUBTITLE_EXTENSIONS:
-                        sub_src = src.with_suffix(sub_ext)
-                        if sub_src.exists() and sub_src not in processed_subs:
+                    # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
+                    video_filename = src.stem
+                    video_parent = src.parent
+                    
+                    # 先收集关联文件
+                    sub_files_to_move = []
+                    for f in video_parent.iterdir():
+                        if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
+                            if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                                sub_files_to_move.append(f)
+                    
+                    # 处理字幕文件
+                    for sub_src in sub_files_to_move:
+                        if sub_src not in processed_subs:
                             sub_dst = extras_folder / sub_src.name
                             if FileOperator.operate(sub_src, sub_dst, mode):
                                 success += 1
