@@ -41,9 +41,12 @@ class Config:
     ]
     
     DEFAULT = {
-        'source_dir': '', 'target_dir': '', 'tmdb_api_key': '',
-        'move_mode': 'link',
-        'video_extensions': DEFAULT_VIDEO_EXTENSIONS.copy(),  # 可自定义视频格式
+        'source_dir': '',           # 源目录
+        'target_dir': '',           # 目标目录
+        'tmdb_api_key': '',         # TMDB API Key
+        'move_mode': 'link',        # 整理模式：link=硬链接，cut=剪切，copy=复制
+        'video_extensions': DEFAULT_VIDEO_EXTENSIONS.copy(),  # 支持的视频格式列表
+        'auto_extras': True,        # 自动将未匹配视频整理到 extras 文件夹
     }
 
     def __init__(self):
@@ -1338,7 +1341,7 @@ class MainWindow(QMainWindow):
                     continue
 
                 child = FolderTreeItem()
-                child.setText(0, "  📁 " + sub.name)
+                child.setText(0, "📁 " + sub.name)
 
                 sub_matched = sum(1 for f in sub_video_files if f in matched_files)
 
@@ -1372,7 +1375,7 @@ class MainWindow(QMainWindow):
 
         # 检查是否是子文件夹（通过文本判断）
         parent_text = item.text(0)
-        is_subfolder = parent_text.startswith("  📁 ")
+        is_subfolder = parent_text.startswith("📁 ")
 
         if is_subfolder:
             # 子文件夹：加载该子文件夹下的所有视频
@@ -1610,6 +1613,42 @@ class MainWindow(QMainWindow):
             else:
                 fail += 1
 
+        # 处理未匹配的文件（移动到 extras 文件夹）
+        # 逻辑：找到已匹配文件所在的动漫文件夹（源目录的子目录），处理整个动漫文件夹
+        if self.config.get('auto_extras', True):
+            matched_files = list(self.file_mappings.keys())
+            if matched_files:
+                # 获取源目录
+                source_dir = Path(self.config.get('source_dir', ''))
+                if source_dir.exists():
+                    # 找到每个已匹配文件所属的动漫文件夹（源目录的直接子目录）
+                    anime_folders = set()
+                    for f in matched_files:
+                        try:
+                            relative = f.relative_to(source_dir)
+                            anime_folder = source_dir / relative.parts[0]
+                            anime_folders.add(anime_folder)
+                        except ValueError:
+                            continue
+
+                    # 处理每个动漫文件夹
+                    for anime_folder in anime_folders:
+                        all_videos = self._get_folder_videos(anime_folder)
+                        # 兼容 Python 3.8+
+                        matched_paths = set(f for f in matched_files if str(f).startswith(str(anime_folder)))
+                        unmatched_videos = [v for v in all_videos if v not in matched_paths]
+
+                        if unmatched_videos:
+                            extras_folder = target_path / f"{tv_name} ({year})" / "extras"
+                            extras_folder.mkdir(parents=True, exist_ok=True)
+                            for src in unmatched_videos:
+                                if src.exists():
+                                    dst = extras_folder / src.name
+                                    if FileOperator.operate(src, dst, mode):
+                                        success += 1
+                                    else:
+                                        fail += 1
+
         QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
         self.file_mappings.clear()
         self.link_btn.setEnabled(False)
@@ -1709,16 +1748,24 @@ class ConfigDialog(QDialog):
         self.ext_edit = QLineEdit()
         self.ext_edit.setPlaceholderText(".mp4,.mkv,.avi,...")
         self.ext_edit.setText(",".join(config.get('video_extensions', config.DEFAULT_VIDEO_EXTENSIONS)))
-        self.ext_edit.setToolTip("支持的视频格式，用逗号或空格分隔")
         form.addRow("视频格式:", self.ext_edit)
+        
+        # 视频格式说明
+        ext_tip = QLabel("用逗号或空格分隔，如：.mp4,.mkv,.avi")
+        ext_tip.setStyleSheet("color: #666; font-size: 12px;")
+        form.addRow("", ext_tip)
+
+        # 未匹配文件配置
+        self.extras_check = QCheckBox("整理到 extras 文件夹")
+        self.extras_check.setChecked(config.get('auto_extras', True))
+        form.addRow("未匹配文件:", self.extras_check)
+        
+        # 未匹配文件说明
+        extras_tip = QLabel("开启后，未匹配的视频文件会自动移动到 extras 文件夹")
+        extras_tip.setStyleSheet("color: #666; font-size: 12px;")
+        form.addRow("", extras_tip)
 
         layout.addLayout(form)
-
-        # 添加说明
-        tip_label = QLabel("💡 提示：支持所有常见视频格式，包括 .mp4, .mkv, .avi, .wmv, .flv, .webm, .m4v, .mov, .ts, .mpg, .mpeg, .rm, .rmvb 等")
-        tip_label.setWordWrap(True)
-        tip_label.setStyleSheet("color: #666; font-size: 12px;")
-        layout.addWidget(tip_label)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -1741,6 +1788,8 @@ class ConfigDialog(QDialog):
         exts = [ext.strip().lower() for ext in re.split(r'[,\s]+', ext_text) if ext.strip()]
         if exts:
             self.config.set('video_extensions', exts)
+        # 保存 auto_extras 配置
+        self.config.set('auto_extras', self.extras_check.isChecked())
         self.config.save()
 
 
