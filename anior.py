@@ -1329,18 +1329,22 @@ class MainWindow(QMainWindow):
             is_all_matched = total_count > 0 and matched_count == total_count
             apply_highlight(item, is_all_matched)
 
-            # 添加子文件夹（可折叠）
+            # 添加子文件夹（只显示包含视频文件的子文件夹）
             subfolders = [d for d in folder.iterdir() if d.is_dir()]
             for sub in subfolders:
+                sub_video_files = self._get_folder_videos(sub)
+                # 跳过没有视频文件的子文件夹
+                if not sub_video_files:
+                    continue
+
                 child = FolderTreeItem()
                 child.setText(0, "  📁 " + sub.name)
 
-                sub_video_files = self._get_folder_videos(sub)
                 sub_matched = sum(1 for f in sub_video_files if f in matched_files)
 
                 child.setText(1, f"{sub_matched}/{len(sub_video_files)}")
                 child.setData(1, Qt.UserRole, len(sub_video_files))  # 存储总数用于排序
-                
+
                 sub_date_timestamp = sub.stat().st_mtime
                 child.setText(2, datetime.fromtimestamp(sub_date_timestamp).strftime('%Y-%m-%d %H:%M'))
                 child.setData(2, Qt.UserRole, sub_date_timestamp)  # 存储时间戳用于排序
