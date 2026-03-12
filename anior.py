@@ -48,6 +48,7 @@ class Config:
         'move_mode': 'link',        # 整理模式：link=硬链接，cut=剪切，copy=复制
         'video_extensions': DEFAULT_VIDEO_EXTENSIONS.copy(),  # 支持的视频格式列表
         'auto_extras': True,        # 自动将未匹配视频整理到 extras 文件夹
+        'embyignore_extras': True,  # 在 extras 文件夹生成.embyignore 文件
     }
 
     def __init__(self):
@@ -1885,6 +1886,12 @@ class MainWindow(QMainWindow):
                 else:
                     fail += 1
 
+        # 生成.embyignore 文件（如果开启）
+        if self.config.get('embyignore_extras', True) and extras_files:
+            embyignore_file = extras_folder / ".embyignore"
+            if not embyignore_file.exists():
+                embyignore_file.touch()
+
         QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
         self.file_mappings.clear()
         self.link_btn.setEnabled(False)
@@ -1995,11 +2002,21 @@ class ConfigDialog(QDialog):
         self.extras_check = QCheckBox("整理到 extras 文件夹")
         self.extras_check.setChecked(config.get('auto_extras', True))
         form.addRow("未匹配文件:", self.extras_check)
-        
+
         # 未匹配文件说明
         extras_tip = QLabel("开启后，未匹配的视频文件会自动移动到 extras 文件夹")
         extras_tip.setStyleSheet("color: #666; font-size: 12px;")
         form.addRow("", extras_tip)
+
+        # embyignore 配置
+        self.embyignore_check = QCheckBox("生成.embyignore 文件")
+        self.embyignore_check.setChecked(config.get('embyignore_extras', True))
+        form.addRow("extras 忽略:", self.embyignore_check)
+
+        # embyignore 说明
+        embyignore_tip = QLabel("在 extras 文件夹生成.embyignore 文件，让 Emby 忽略该文件夹")
+        embyignore_tip.setStyleSheet("color: #666; font-size: 12px;")
+        form.addRow("", embyignore_tip)
 
         layout.addLayout(form)
 
@@ -2026,6 +2043,8 @@ class ConfigDialog(QDialog):
             self.config.set('video_extensions', exts)
         # 保存 auto_extras 配置
         self.config.set('auto_extras', self.extras_check.isChecked())
+        # 保存 embyignore_extras 配置
+        self.config.set('embyignore_extras', self.embyignore_check.isChecked())
         self.config.save()
 
 
