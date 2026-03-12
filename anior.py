@@ -36,7 +36,7 @@ CONFIG_PATH = CONFIG_DIR / 'config.json'
 class Config:
     DEFAULT = {
         'source_dir': '', 'target_dir': '', 'tmdb_api_key': '',
-        'window_width': 1400, 'window_height': 900,
+        'window_width': 1400, 'window_height': 1000,  # 窗口更高
         'splitter_ratio': [400, 900], 'move_mode': 'link',
     }
 
@@ -178,9 +178,13 @@ class SearchSelectDialog(QDialog):
         self.result_list.setColumnWidth(2, 60)   # 评分列初始宽度
         self.result_list.header().setSectionsMovable(True)  # 允许移动列
         self.result_list.header().setSectionsClickable(True)  # 允许点击排序
+        self.result_list.setSortingEnabled(True)  # 启用排序
         self.result_list.setSelectionMode(QTreeWidget.SingleSelection)
         self.result_list.itemDoubleClicked.connect(self.select_item)
         layout.addWidget(self.result_list)
+
+        # 禁用自动排序，保持 API 返回的原始顺序（相关性排序）
+        self.result_list.header().setSortIndicator(-1, Qt.AscendingOrder)
 
         # 按钮
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1094,13 +1098,15 @@ class MainWindow(QMainWindow):
         self.folder_tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
         self.folder_tree.header().setSectionResizeMode(1, QHeaderView.Interactive)
         self.folder_tree.header().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.folder_tree.setColumnWidth(0, 300)  # 文件夹初始宽度
-        self.folder_tree.setColumnWidth(1, 80)   # 文件数初始宽度
-        self.folder_tree.setColumnWidth(2, 120)  # 日期初始宽度
+        self.folder_tree.setColumnWidth(0, 600)  # 文件夹 - 更宽
+        self.folder_tree.setColumnWidth(1, 90)   # 文件数
+        self.folder_tree.setColumnWidth(2, 150)  # 日期
         self.folder_tree.header().setMinimumSectionSize(50)
         self.folder_tree.header().setSectionsMovable(True)  # 允许移动列
         self.folder_tree.header().setSectionsClickable(True)  # 允许点击排序
         self.folder_tree.setSortingEnabled(True)  # 允许点击排序
+        # 默认按文件夹名称升序排序
+        self.folder_tree.header().setSortIndicator(0, Qt.AscendingOrder)
         self.folder_tree.setStyleSheet("""
             QTreeWidget {
                 border: 1px solid #ccc;
@@ -1126,13 +1132,15 @@ class MainWindow(QMainWindow):
         self.video_list.header().setSectionResizeMode(0, QHeaderView.Interactive)
         self.video_list.header().setSectionResizeMode(1, QHeaderView.Interactive)
         self.video_list.header().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.video_list.setColumnWidth(0, 300)  # 文件名初始宽度
-        self.video_list.setColumnWidth(1, 120)  # 大小初始宽度
-        self.video_list.setColumnWidth(2, 140)  # 日期初始宽度
+        self.video_list.setColumnWidth(0, 560)  # 文件名 - 更宽
+        self.video_list.setColumnWidth(1, 100)  # 大小
+        self.video_list.setColumnWidth(2, 180)  # 日期
         self.video_list.header().setMinimumSectionSize(50)
         self.video_list.header().setSectionsMovable(True)  # 允许移动列
         self.video_list.header().setSectionsClickable(True)  # 允许点击排序
         self.video_list.setSortingEnabled(True)  # 启用排序
+        # 默认按文件名升序排序
+        self.video_list.header().setSortIndicator(0, Qt.AscendingOrder)
         self.video_list.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.video_list.setStyleSheet("""
             QTreeWidget {
@@ -1218,8 +1226,8 @@ class MainWindow(QMainWindow):
         season_main_layout.addWidget(self.link_btn)
 
         splitter.addWidget(season_group)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 3)  # 左侧 60%
+        splitter.setStretchFactor(1, 2)  # 右侧 40%
 
         layout.addWidget(splitter, 1)
 
