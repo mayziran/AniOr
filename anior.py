@@ -17,10 +17,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QFileDialog, QMessageBox, QFrame,
     QScrollArea, QHeaderView, QStatusBar, QCheckBox, QComboBox,
     QDialog, QDialogButtonBox, QFormLayout, QTabWidget, QSizePolicy,
-    QAbstractItemView
+    QAbstractItemView, QTableWidget, QTableWidgetItem
 )
 from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl, QSettings, QByteArray
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices, QFont
 
 # 配置文件路径
 if getattr(sys, 'frozen', False):
@@ -181,6 +181,94 @@ class FileOperator:
             
         except Exception as e:
             return False, f"{type(e).__name__}: {str(e)}"
+
+
+# ==================== 整理完成弹窗 ====================
+class OrganizeResultDialog(QDialog):
+    """整理完成结果弹窗 - 显示统计、未整理文件（含重名高亮）"""
+    
+    def __init__(self, success_count, fail_count, unorganized_files, mode_name, parent=None):
+        super().__init__(parent)
+        self.success_count = success_count
+        self.fail_count = fail_count
+        self.unorganized_files = unorganized_files
+        self.mode_name = mode_name
+        self.selected_files = []
+        
+        self.setWindowTitle("整理完成")
+        self.setMinimumSize(800, 600)
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        
+        # 统计信息
+        stats_group = QGroupBox("整理统计")
+        stats_layout = QVBoxLayout()
+        stats_text = f"✅ 成功：{self.success_count} 个文件\n"
+        if self.fail_count > 0:
+            stats_text += f"❌ 失败：{self.fail_count} 个文件"
+        stats_label = QLabel(stats_text)
+        stats_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px;")
+        stats_layout.addWidget(stats_label)
+        stats_group.setLayout(stats_layout)
+        layout.addWidget(stats_group)
+        
+        # 说明文字和图例
+        info_layout = QHBoxLayout()
+        info_label = QLabel("以下是源目录中未被整理的文件（包含所有格式），勾选确认后将整理到 extras 文件夹：")
+        info_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        info_layout.addWidget(info_label)
+        legend_label = QLabel("🔴 红色 = 因重名未整理（置顶显示）")
+        legend_label.setStyleSheet("color: #c00; font-weight: bold; padding: 5px;")
+        info_layout.addWidget(legend_label)
+        info_layout.addStretch()
+        layout.addLayout(info_layout)
+        
+        # 文件列表
+        self.file_table = QTableWidget()
+        self.file_table.setColumnCount(2)
+        self.file_table.setHorizontalHeaderLabels(["✓ 选择", "文件路径"])
+        self.file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.file_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.file_row_map = {}
+        
+        for file_path, is_duplicate in self.unorganized_files:
+            row = self.file_table.rowCount()
+            self.file_table.insertRow(row)
+            check_item = QTableWidgetItem()
+            check_item.setFlags(check_item.flags() | Qt.ItemIsUserCheckable)
+            check_item.setCheckState(Qt.Unchecked)
+            self.file_table.setItem(row, 0, check_item)
+            path_item = QTableWidgetItem(str(file_path))
+            path_item.setFlags(Qt.ItemIsEnabled)
+            path_item.setToolTip(str(file_path))
+            if is_duplicate:
+                path_item.setBackground(QColor("#ffc0c0"))
+                path_item.setForeground(QColor("#c00"))
+                path_item.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+            self.file_table.setItem(row, 1, path_item)
+            self.file_row_map[row] = file_path
+        
+        layout.addWidget(self.file_table)
+        
+        # 按钮
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.on_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def on_accept(self):
+        self.selected_files = []
+        for row in range(self.file_table.rowCount()):
+            check_item = self.file_table.item(row, 0)
+            if check_item and check_item.checkState() == Qt.Checked:
+                file_path = self.file_row_map.get(row)
+                if file_path:
+                    self.selected_files.append(file_path)
+        self.accept()
 
 
 # ==================== 工作线程 ====================
@@ -1897,6 +1985,7 @@ class MainWindow(QMainWindow):
             success, fail = 0, 0
             fail_details = []  # 记录失败详情
             extras_files = []  # 收集 extras 文件（包括 extras 标签页和 auto_extras 的）
+            processed_files = set(self.file_mappings.keys())  # 记录所有已处理的文件（包括字幕）
 
             # 1. 收集 extras 标签页的文件
             for src, ep_key in self.file_mappings.items():
@@ -1947,7 +2036,7 @@ class MainWindow(QMainWindow):
                     success += 1
                 else:
                     fail += 1
-                    fail_details.append(f"{src.name} -> {dst.name}: {error}")
+                    fail_details.append((src, dst, error))  # 存储完整路径
                     continue
 
                 # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
@@ -1968,15 +2057,14 @@ class MainWindow(QMainWindow):
                     ok, error = FileOperator.operate(sub_src, sub_dst, mode)
                     if ok:
                         success += 1
+                        processed_files.add(sub_src)  # 记录已处理的字幕
                     else:
                         fail += 1
-                        fail_details.append(f"{sub_src.name} -> {sub_dst.name}: {error}")
+                        fail_details.append((sub_src, sub_dst, error))  # 存储完整路径
 
             # 4. 处理所有 extras 文件（不重命名）
             extras_folder = target_path / f"{tv_name} ({year})" / "extras"
             extras_folder.mkdir(parents=True, exist_ok=True)
-
-            processed_subs = set()  # 记录已处理的字幕文件，避免重复
 
             for src in extras_files:
                 if src.exists():
@@ -1984,6 +2072,7 @@ class MainWindow(QMainWindow):
                     ok, error = FileOperator.operate(src, dst, mode)
                     if ok:
                         success += 1
+                        processed_files.add(src)  # 记录已处理的 extras 文件
                         # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
                         video_filename = src.stem
                         video_parent = src.parent
@@ -1997,18 +2086,18 @@ class MainWindow(QMainWindow):
 
                         # 处理字幕文件
                         for sub_src in sub_files_to_move:
-                            if sub_src not in processed_subs:
+                            if sub_src not in processed_files:  # 避免重复处理
                                 sub_dst = extras_folder / sub_src.name
                                 ok, error = FileOperator.operate(sub_src, sub_dst, mode)
                                 if ok:
                                     success += 1
-                                    processed_subs.add(sub_src)
+                                    processed_files.add(sub_src)  # 记录已处理的字幕
                                 else:
                                     fail += 1
-                                    fail_details.append(f"{sub_src.name} -> {sub_dst.name}: {error}")
+                                    fail_details.append((sub_src, sub_dst, error))  # 存储完整路径
                     else:
                         fail += 1
-                        fail_details.append(f"{src.name} -> {dst.name}: {error}")
+                        fail_details.append((src, dst, error))  # 存储完整路径
 
             # 生成.embyignore 文件（如果开启）
             if self.config.get('embyignore_extras', True) and extras_files:
@@ -2016,18 +2105,81 @@ class MainWindow(QMainWindow):
                 if not embyignore_file.exists():
                     embyignore_file.touch()
 
-            # 显示完成信息
-            if fail > 0:
-                # 显示失败详情
-                detail_text = f"成功：{success}\n失败：{fail}\n\n失败详情：\n"
-                for i, detail in enumerate(fail_details[:10], 1):  # 最多显示 10 条
-                    detail_text += f"{i}. {detail}\n"
-                if len(fail_details) > 10:
-                    detail_text += f"... 还有 {len(fail_details) - 10} 条失败记录"
-                QMessageBox.warning(self, "整理完成（部分失败）", detail_text)
-            else:
-                QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
+            # 收集未整理的文件
+            unorganized_files = []
+            
+            # 从 fail_details 中提取因重名未整理的文件（完整路径）
+            duplicate_files = set()
+            for src, dst, error in fail_details:
+                if "目标文件已存在" in error:
+                    duplicate_files.add(src)  # 添加源文件完整路径
+            
+            # 扫描源目录中的所有文件，排除已处理的
+            source_dir = Path(self.config.get('source_dir', ''))
+            
+            if source_dir.exists():
+                # 找到每个已匹配文件所属的动漫文件夹
+                anime_folders = set()
+                for f in self.file_mappings.keys():
+                    try:
+                        relative = f.relative_to(source_dir)
+                        anime_folder = source_dir / relative.parts[0]
+                        anime_folders.add(anime_folder)
+                    except ValueError:
+                        continue
                 
+                # 扫描每个动漫文件夹中的所有文件
+                for anime_folder in anime_folders:
+                    # 先添加重名失败的文件（标红置顶）
+                    for dup_file in duplicate_files:
+                        if dup_file.is_relative_to(anime_folder):
+                            unorganized_files.append((dup_file, True))
+                    
+                    # 再添加普通未整理文件
+                    for f in anime_folder.rglob('*'):
+                        if f.is_file():
+                            if f not in processed_files:
+                                unorganized_files.append((f, False))
+
+            # 显示完成弹窗
+            mode_names = {'link': '硬链接', 'cut': '剪切', 'copy': '复制'}
+            mode_name = mode_names.get(mode, '硬链接')
+            
+            dialog = OrganizeResultDialog(success, fail, unorganized_files, mode_name, self)
+            if dialog.exec_() == QDialog.Accepted:
+                selected_files = dialog.selected_files
+                if selected_files:
+                    reply = QMessageBox.question(
+                        self, "确认",
+                        f"确定要将 {len(selected_files)} 个文件以 {mode_name} 方式整理到 extras 文件夹吗？",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes:
+                        extras_move_count = 0
+                        extras_folder = target_path / f"{tv_name} ({year})" / "extras"
+                        extras_folder.mkdir(parents=True, exist_ok=True)
+                        processed_subs = set()
+                        
+                        for src in selected_files:
+                            if src.exists():
+                                dst = extras_folder / src.name
+                                ok, error = FileOperator.operate(src, dst, mode)
+                                if ok:
+                                    extras_move_count += 1
+                                    video_filename = src.stem
+                                    video_parent = src.parent
+                                    for f in video_parent.iterdir():
+                                        if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
+                                            if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                                                if f not in processed_subs:
+                                                    sub_dst = extras_folder / f.name
+                                                    ok, error = FileOperator.operate(f, sub_dst, mode)
+                                                    if ok:
+                                                        extras_move_count += 1
+                                                        processed_subs.add(f)
+                        
+                        QMessageBox.information(self, "完成", f"已{mode_name} {extras_move_count} 个文件到 extras 文件夹")
+
             # 不清空映射，保持按钮可用（用户可以修改映射后重新整理，或整理下一个动漫）
             # 搜索新番剧时 _load_season_tabs() 会自动清空映射
             

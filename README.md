@@ -12,7 +12,7 @@
 
 ## 安装与运行
 
-```bash
+```bash![alt text](image.png)
 # 安装依赖
 pip install -r requirements.txt
 
