@@ -1799,7 +1799,7 @@ class MainWindow(QMainWindow):
         self.file_mappings.clear()
         for tab in self.season_tabs.values():
             self.file_mappings.update(tab.file_mappings)
-        
+
         # 添加 extras 标签页的文件
         if self.extras_tab:
             self.file_mappings.update(self.extras_tab.file_mappings)
@@ -1824,45 +1824,22 @@ class MainWindow(QMainWindow):
         year = (self.tv_info.get('first_air_date', '') or '')[:4]
 
         success, fail = 0, 0
-        extras_files = []  # 收集 extras 标签页的文件
-        
+        extras_files = []  # 收集 extras 文件（包括 extras 标签页和 auto_extras 的）
+
+        # 1. 收集 extras 标签页的文件
         for src, ep_key in self.file_mappings.items():
             if not src.exists():
                 fail += 1
                 continue
-            
-            # extras 标签页的文件直接收集，不重命名
+
             if ep_key == "extras":
                 extras_files.append(src)
-                continue
-            
-            # 季度文件：重命名并移动到对应季度文件夹
-            s_num = int(ep_key[1:3])
-            folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
-            dst = folder / f"{ep_key} - {src.name}"
-            if FileOperator.operate(src, dst, mode):
-                success += 1
-            else:
-                fail += 1
-        
-        # 处理 extras 文件（包括 extras 标签页和自动 extras）
-        extras_folder = target_path / f"{tv_name} ({year})" / "extras"
-        
-        # 1. 处理 extras 标签页的文件（保留原文件名）
-        for src in extras_files:
-            if src.exists():
-                dst = extras_folder / src.name
-                if FileOperator.operate(src, dst, mode):
-                    success += 1
-                else:
-                    fail += 1
-        
-        # 2. 处理未匹配的文件（如果开启了 auto_extras）
+
+        # 2. auto_extras: 扫描未匹配文件并添加到 extras_files
         if self.config.get('auto_extras', True):
-            # 获取源目录
             source_dir = Path(self.config.get('source_dir', ''))
             if source_dir.exists():
-                # 找到每个已匹配文件所属的动漫文件夹（源目录的直接子目录）
+                # 找到每个已匹配文件所属的动漫文件夹
                 anime_folders = set()
                 for f in self.file_mappings.keys():
                     try:
@@ -1872,25 +1849,41 @@ class MainWindow(QMainWindow):
                     except ValueError:
                         continue
 
-                # 处理每个动漫文件夹
+                # 扫描每个动漫文件夹的未匹配文件
                 for anime_folder in anime_folders:
                     all_videos = self._get_folder_videos(anime_folder)
-                    # 已匹配的文件（不包括 extras 标签页的）
-                    matched_paths = set(
-                        f for f in self.file_mappings.keys()
-                        if str(f).startswith(str(anime_folder)) and self.file_mappings[f] != "extras"
-                    )
+                    matched_paths = set(self.file_mappings.keys())
                     unmatched_videos = [v for v in all_videos if v not in matched_paths]
+                    extras_files.extend(unmatched_videos)
 
-                    if unmatched_videos:
-                        extras_folder.mkdir(parents=True, exist_ok=True)
-                        for src in unmatched_videos:
-                            if src.exists():
-                                dst = extras_folder / src.name
-                                if FileOperator.operate(src, dst, mode):
-                                    success += 1
-                                else:
-                                    fail += 1
+        # 3. 处理季度文件（重命名）
+        for src, ep_key in self.file_mappings.items():
+            if not src.exists():
+                fail += 1
+                continue
+
+            if ep_key == "extras":
+                continue  # extras 文件稍后处理
+
+            s_num = int(ep_key[1:3])
+            folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
+            dst = folder / f"{ep_key} - {src.name}"
+            if FileOperator.operate(src, dst, mode):
+                success += 1
+            else:
+                fail += 1
+
+        # 4. 处理所有 extras 文件（不重命名）
+        extras_folder = target_path / f"{tv_name} ({year})" / "extras"
+        extras_folder.mkdir(parents=True, exist_ok=True)
+
+        for src in extras_files:
+            if src.exists():
+                dst = extras_folder / src.name
+                if FileOperator.operate(src, dst, mode):
+                    success += 1
+                else:
+                    fail += 1
 
         QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
         self.file_mappings.clear()
