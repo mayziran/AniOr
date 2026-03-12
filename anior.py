@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QTableWidget, QTableWidgetItem
 )
 from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl, QSettings, QByteArray
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices, QFont
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices, QFont, QIcon
 
 # 配置文件路径
 if getattr(sys, 'frozen', False):
@@ -2373,6 +2373,11 @@ def main():
         QLineEdit { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
         QStatusBar { background-color: #f5f5f5; }
     """)
+
+    # 设置应用程序图标
+    icon_path = Path(__file__).parent / "docs" / "icon.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     try:
         window = MainWindow()
