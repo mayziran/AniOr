@@ -229,19 +229,27 @@ class OrganizeResultDialog(QDialog):
         # 文件列表
         self.file_table = QTableWidget()
         self.file_table.setColumnCount(2)
-        self.file_table.setHorizontalHeaderLabels(["✓ 选择", "文件路径"])
+        self.file_table.setHorizontalHeaderLabels(["✓ 全选", "文件路径"])
         self.file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.file_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)  # 禁用编辑
         self.file_row_map = {}
         
+        # 点击表头时切换全选状态
+        self.file_table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
+
         for file_path, is_duplicate in self.unorganized_files:
             row = self.file_table.rowCount()
             self.file_table.insertRow(row)
-            check_item = QTableWidgetItem()
-            check_item.setFlags(check_item.flags() | Qt.ItemIsUserCheckable)
+            
+            # 复选框单元格
+            check_item = QTableWidgetItem("")
+            check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             check_item.setCheckState(Qt.Unchecked)
             self.file_table.setItem(row, 0, check_item)
+            
+            # 文件路径单元格
             path_item = QTableWidgetItem(str(file_path))
             path_item.setFlags(Qt.ItemIsEnabled)
             path_item.setToolTip(str(file_path))
@@ -253,13 +261,28 @@ class OrganizeResultDialog(QDialog):
             self.file_row_map[row] = file_path
         
         layout.addWidget(self.file_table)
-        
+
         # 按钮
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.on_accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
     
+    def on_header_clicked(self, logical_index):
+        """点击表头时切换全选状态"""
+        if logical_index == 0:
+            all_checked = True
+            for row in range(self.file_table.rowCount()):
+                check_item = self.file_table.item(row, 0)
+                if not check_item or check_item.checkState() != Qt.Checked:
+                    all_checked = False
+                    break
+            state = Qt.Unchecked if all_checked else Qt.Checked
+            for row in range(self.file_table.rowCount()):
+                check_item = self.file_table.item(row, 0)
+                if check_item:
+                    check_item.setCheckState(state)
+
     def on_accept(self):
         self.selected_files = []
         for row in range(self.file_table.rowCount()):
