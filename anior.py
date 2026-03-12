@@ -152,11 +152,22 @@ class TMDBClient:
 # ==================== 文件操作 ====================
 class FileOperator:
     @staticmethod
-    def operate(src: Path, dst: Path, mode: str) -> bool:
+    def operate(src: Path, dst: Path, mode: str) -> Tuple[bool, str]:
+        """
+        执行文件操作
+        
+        Returns:
+            (success, error_message) 元组
+            - 成功：(True, "")
+            - 失败：(False, "错误原因")
+        """
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 如果目标文件已存在，报错（防止误覆盖）
             if dst.exists():
-                dst.unlink()
+                return False, f"目标文件已存在：{dst.name}"
+            
             if mode == 'link':
                 os.link(src, dst)
             elif mode == 'cut':
@@ -164,10 +175,12 @@ class FileOperator:
             elif mode == 'copy':
                 shutil.copy2(src, dst)
             else:
-                return False
-            return True
-        except:
-            return False
+                return False, "无效的整理模式"
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, f"{type(e).__name__}: {str(e)}"
 
 
 # ==================== 工作线程 ====================
@@ -1852,150 +1865,177 @@ class MainWindow(QMainWindow):
         self.video_list.setUpdatesEnabled(True)
 
     def start_link(self):
-        # 收集所有映射
-        self.file_mappings.clear()
-        for tab in self.season_tabs.values():
-            self.file_mappings.update(tab.file_mappings)
+        try:
+            # 收集所有映射
+            self.file_mappings.clear()
+            for tab in self.season_tabs.values():
+                self.file_mappings.update(tab.file_mappings)
 
-        # 添加 extras 标签页的文件
-        if self.extras_tab:
-            self.file_mappings.update(self.extras_tab.file_mappings)
+            # 添加 extras 标签页的文件
+            if self.extras_tab:
+                self.file_mappings.update(self.extras_tab.file_mappings)
 
-        if not self.file_mappings:
-            QMessageBox.warning(self, "警告", "请先拖放文件到季度区域或 extras")
-            return
+            if not self.file_mappings:
+                QMessageBox.warning(self, "警告", "请先拖放文件到季度区域或 extras")
+                return
 
-        target = self.config.get('target_dir')
-        if not target:
-            QMessageBox.warning(self, "警告", "请先在设置中配置目标目录")
-            return
+            target = self.config.get('target_dir')
+            if not target:
+                QMessageBox.warning(self, "警告", "请先在设置中配置目标目录")
+                return
 
-        mode = self.config.get('move_mode', 'link')
-        mode_names = {'link': '硬链接', 'cut': '剪切', 'copy': '复制'}
+            mode = self.config.get('move_mode', 'link')
+            mode_names = {'link': '硬链接', 'cut': '剪切', 'copy': '复制'}
 
-        if QMessageBox.question(self, "确认", f"使用 {mode_names.get(mode, '硬链接')} 模式整理 {len(self.file_mappings)} 个文件？") != QMessageBox.Yes:
-            return
+            if QMessageBox.question(self, "确认", f"使用 {mode_names.get(mode, '硬链接')} 模式整理 {len(self.file_mappings)} 个文件？") != QMessageBox.Yes:
+                return
 
-        target_path = Path(target)
-        tv_name = self.tv_info.get('name', 'Unknown')
-        year = (self.tv_info.get('first_air_date', '') or '')[:4]
+            target_path = Path(target)
+            tv_name = self.tv_info.get('name', 'Unknown')
+            year = (self.tv_info.get('first_air_date', '') or '')[:4]
 
-        success, fail = 0, 0
-        extras_files = []  # 收集 extras 文件（包括 extras 标签页和 auto_extras 的）
+            success, fail = 0, 0
+            fail_details = []  # 记录失败详情
+            extras_files = []  # 收集 extras 文件（包括 extras 标签页和 auto_extras 的）
 
-        # 1. 收集 extras 标签页的文件
-        for src, ep_key in self.file_mappings.items():
-            if not src.exists():
-                fail += 1
-                continue
+            # 1. 收集 extras 标签页的文件
+            for src, ep_key in self.file_mappings.items():
+                if not src.exists():
+                    fail += 1
+                    continue
 
-            if ep_key == "extras":
-                extras_files.append(src)
+                if ep_key == "extras":
+                    extras_files.append(src)
 
-        # 2. auto_extras: 扫描未匹配文件并添加到 extras_files
-        if self.config.get('auto_extras', True):
-            source_dir = Path(self.config.get('source_dir', ''))
-            if source_dir.exists():
-                # 找到每个已匹配文件所属的动漫文件夹
-                anime_folders = set()
-                for f in self.file_mappings.keys():
-                    try:
-                        relative = f.relative_to(source_dir)
-                        anime_folder = source_dir / relative.parts[0]
-                        anime_folders.add(anime_folder)
-                    except ValueError:
-                        continue
+            # 2. auto_extras: 扫描未匹配文件并添加到 extras_files
+            if self.config.get('auto_extras', True):
+                source_dir = Path(self.config.get('source_dir', ''))
+                if source_dir.exists():
+                    # 找到每个已匹配文件所属的动漫文件夹
+                    anime_folders = set()
+                    for f in self.file_mappings.keys():
+                        try:
+                            relative = f.relative_to(source_dir)
+                            anime_folder = source_dir / relative.parts[0]
+                            anime_folders.add(anime_folder)
+                        except ValueError:
+                            continue
 
-                # 扫描每个动漫文件夹的未匹配文件
-                for anime_folder in anime_folders:
-                    all_videos = self._get_folder_videos(anime_folder)
-                    matched_paths = set(self.file_mappings.keys())
-                    unmatched_videos = [v for v in all_videos if v not in matched_paths]
-                    extras_files.extend(unmatched_videos)
+                    # 扫描每个动漫文件夹的未匹配文件
+                    for anime_folder in anime_folders:
+                        all_videos = self._get_folder_videos(anime_folder)
+                        matched_paths = set(self.file_mappings.keys())
+                        unmatched_videos = [v for v in all_videos if v not in matched_paths]
+                        extras_files.extend(unmatched_videos)
 
-        # 3. 处理季度文件（重命名 + 字幕）
-        for src, ep_key in self.file_mappings.items():
-            if not src.exists():
-                fail += 1
-                continue
+            # 3. 处理季度文件（重命名 + 字幕）
+            for src, ep_key in self.file_mappings.items():
+                if not src.exists():
+                    fail += 1
+                    continue
 
-            if ep_key == "extras":
-                continue  # extras 文件稍后处理
+                if ep_key == "extras":
+                    continue  # extras 文件稍后处理
 
-            s_num = int(ep_key[1:3])
-            folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
-            dst = folder / f"{ep_key} - {src.name}"
-            
-            # 处理视频文件
-            if FileOperator.operate(src, dst, mode):
-                success += 1
+                s_num = int(ep_key[1:3])
+                folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
+                dst = folder / f"{ep_key} - {src.name}"
+
+                # 处理视频文件
+                ok, error = FileOperator.operate(src, dst, mode)
+                if ok:
+                    success += 1
+                else:
+                    fail += 1
+                    fail_details.append(f"{src.name} -> {dst.name}: {error}")
+                    continue
+
+                # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
+                # 例如：视频名.mkv → 视频名.ass、视频名.chs.ass、视频名.jpn.ass 等
+                video_filename = src.stem
+                video_parent = src.parent
+
+                # 先收集关联文件（避免遍历时修改目录）
+                sub_files_to_move = []
+                for f in video_parent.iterdir():
+                    if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
+                        if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                            sub_files_to_move.append(f)
+
+                # 处理字幕文件
+                for sub_src in sub_files_to_move:
+                    sub_dst = folder / f"{ep_key} - {sub_src.name}"
+                    ok, error = FileOperator.operate(sub_src, sub_dst, mode)
+                    if ok:
+                        success += 1
+                    else:
+                        fail += 1
+                        fail_details.append(f"{sub_src.name} -> {sub_dst.name}: {error}")
+
+            # 4. 处理所有 extras 文件（不重命名）
+            extras_folder = target_path / f"{tv_name} ({year})" / "extras"
+            extras_folder.mkdir(parents=True, exist_ok=True)
+
+            processed_subs = set()  # 记录已处理的字幕文件，避免重复
+
+            for src in extras_files:
+                if src.exists():
+                    dst = extras_folder / src.name
+                    ok, error = FileOperator.operate(src, dst, mode)
+                    if ok:
+                        success += 1
+                        # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
+                        video_filename = src.stem
+                        video_parent = src.parent
+
+                        # 先收集关联文件
+                        sub_files_to_move = []
+                        for f in video_parent.iterdir():
+                            if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
+                                if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                                    sub_files_to_move.append(f)
+
+                        # 处理字幕文件
+                        for sub_src in sub_files_to_move:
+                            if sub_src not in processed_subs:
+                                sub_dst = extras_folder / sub_src.name
+                                ok, error = FileOperator.operate(sub_src, sub_dst, mode)
+                                if ok:
+                                    success += 1
+                                    processed_subs.add(sub_src)
+                                else:
+                                    fail += 1
+                                    fail_details.append(f"{sub_src.name} -> {sub_dst.name}: {error}")
+                    else:
+                        fail += 1
+                        fail_details.append(f"{src.name} -> {dst.name}: {error}")
+
+            # 生成.embyignore 文件（如果开启）
+            if self.config.get('embyignore_extras', True) and extras_files:
+                embyignore_file = extras_folder / ".embyignore"
+                if not embyignore_file.exists():
+                    embyignore_file.touch()
+
+            # 显示完成信息
+            if fail > 0:
+                # 显示失败详情
+                detail_text = f"成功：{success}\n失败：{fail}\n\n失败详情：\n"
+                for i, detail in enumerate(fail_details[:10], 1):  # 最多显示 10 条
+                    detail_text += f"{i}. {detail}\n"
+                if len(fail_details) > 10:
+                    detail_text += f"... 还有 {len(fail_details) - 10} 条失败记录"
+                QMessageBox.warning(self, "整理完成（部分失败）", detail_text)
             else:
-                fail += 1
-                continue
-
-            # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
-            # 例如：视频名.mkv → 视频名.ass、视频名.chs.ass、视频名.jpn.ass 等
-            video_filename = src.stem
-            video_parent = src.parent
+                QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
+                
+            # 不清空映射，保持按钮可用（用户可以修改映射后重新整理，或整理下一个动漫）
+            # 搜索新番剧时 _load_season_tabs() 会自动清空映射
             
-            # 先收集关联文件（避免遍历时修改目录）
-            sub_files_to_move = []
-            for f in video_parent.iterdir():
-                if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
-                    if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
-                        sub_files_to_move.append(f)
-            
-            # 处理字幕文件
-            for sub_src in sub_files_to_move:
-                sub_dst = folder / f"{ep_key} - {sub_src.name}"
-                if FileOperator.operate(sub_src, sub_dst, mode):
-                    success += 1
-                else:
-                    fail += 1
-
-        # 4. 处理所有 extras 文件（不重命名）
-        extras_folder = target_path / f"{tv_name} ({year})" / "extras"
-        extras_folder.mkdir(parents=True, exist_ok=True)
-
-        processed_subs = set()  # 记录已处理的字幕文件，避免重复
-
-        for src in extras_files:
-            if src.exists():
-                dst = extras_folder / src.name
-                if FileOperator.operate(src, dst, mode):
-                    success += 1
-                    # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
-                    video_filename = src.stem
-                    video_parent = src.parent
-                    
-                    # 先收集关联文件
-                    sub_files_to_move = []
-                    for f in video_parent.iterdir():
-                        if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
-                            if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
-                                sub_files_to_move.append(f)
-                    
-                    # 处理字幕文件
-                    for sub_src in sub_files_to_move:
-                        if sub_src not in processed_subs:
-                            sub_dst = extras_folder / sub_src.name
-                            if FileOperator.operate(sub_src, sub_dst, mode):
-                                success += 1
-                                processed_subs.add(sub_src)
-                            else:
-                                fail += 1
-                else:
-                    fail += 1
-
-        # 生成.embyignore 文件（如果开启）
-        if self.config.get('embyignore_extras', True) and extras_files:
-            embyignore_file = extras_folder / ".embyignore"
-            if not embyignore_file.exists():
-                embyignore_file.touch()
-
-        QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
-        # 不清空映射，保持按钮可用（用户可以修改映射后重新整理，或整理下一个动漫）
-        # 搜索新番剧时 _load_season_tabs() 会自动清空映射
+        except Exception as e:
+            import traceback
+            error_msg = traceback.format_exc()
+            print(f"[错误] 整理失败：{error_msg}")
+            QMessageBox.critical(self, "错误", f"整理失败：{e}\n\n{error_msg}")
 
     def open_config(self):
         dialog = ConfigDialog(self.config, self)
