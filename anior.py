@@ -1974,8 +1974,8 @@ class MainWindow(QMainWindow):
                 embyignore_file.touch()
 
         QMessageBox.information(self, "完成", f"成功：{success}\n失败：{fail}")
-        self.file_mappings.clear()
-        self.link_btn.setEnabled(False)
+        # 不清空映射，保持按钮可用（用户可以修改映射后重新整理，或整理下一个动漫）
+        # 搜索新番剧时 _load_season_tabs() 会自动清空映射
 
     def open_config(self):
         dialog = ConfigDialog(self.config, self)
