@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import shutil
+import re
 import requests
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
@@ -20,9 +21,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl, QSettings, QByteArray
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices
 
-# 视频文件扩展名
-VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.wmv', '.flv', '.webm', '.m4v', '.mov', '.ts'}
-
 # 配置文件路径
 if getattr(sys, 'frozen', False):
     CONFIG_DIR = Path(sys.executable).parent / 'config'
@@ -34,9 +32,18 @@ CONFIG_PATH = CONFIG_DIR / 'config.json'
 
 # ==================== 用户配置管理 ====================
 class Config:
+    # 默认视频格式（覆盖主流 + 参考项目格式）
+    DEFAULT_VIDEO_EXTENSIONS = [
+        '.mp4', '.mkv', '.avi', '.wmv', '.flv',  # 主流格式
+        '.webm', '.m4v', '.mov', '.ts',          # 现代格式
+        '.mpg', '.mpeg',                         # MPEG 格式
+        '.rm', '.rmvb',                          # RealMedia（参考项目支持）
+    ]
+    
     DEFAULT = {
         'source_dir': '', 'target_dir': '', 'tmdb_api_key': '',
         'move_mode': 'link',
+        'video_extensions': DEFAULT_VIDEO_EXTENSIONS.copy(),  # 可自定义视频格式
     }
 
     def __init__(self):
@@ -71,6 +78,11 @@ class Config:
     def save_if_needed(self):
         if self._pending:
             self.save()
+
+    def get_video_extensions(self) -> set:
+        """获取视频格式集合（小写）"""
+        exts = self.config.get('video_extensions', self.DEFAULT_VIDEO_EXTENSIONS)
+        return {ext.lower() for ext in exts}
 
 
 # ==================== TMDB API ====================
@@ -1085,6 +1097,9 @@ class MainWindow(QMainWindow):
         # 保持线程引用
         self._workers = []
 
+        # 视频格式缓存
+        self._video_extensions = self.config.get_video_extensions()
+
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
@@ -1360,7 +1375,7 @@ class MainWindow(QMainWindow):
             videos = sorted(self._get_folder_videos(folder), key=lambda x: x.name)
         else:
             # 主文件夹：只加载根目录下的视频（不包含子文件夹）
-            videos = sorted([f for f in folder.glob('*') if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS], key=lambda x: x.name)
+            videos = sorted([f for f in folder.glob('*') if f.is_file() and f.suffix.lower() in self._video_extensions], key=lambda x: x.name)
 
         # 从所有季度收集已匹配的文件
         matched_files = set()
@@ -1461,8 +1476,8 @@ class MainWindow(QMainWindow):
         """获取文件夹下的所有视频文件（带缓存）"""
         if folder in self._folder_video_cache:
             return self._folder_video_cache[folder]
-        
-        videos = [f for f in folder.rglob('*') if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS]
+
+        videos = [f for f in folder.rglob('*') if f.is_file() and f.suffix.lower() in self._video_extensions]
         self._folder_video_cache[folder] = videos
         return videos
 
@@ -1686,7 +1701,20 @@ class ConfigDialog(QDialog):
         self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
         form.addRow("整理模式:", self.mode_combo)
 
+        # 视频格式配置
+        self.ext_edit = QLineEdit()
+        self.ext_edit.setPlaceholderText(".mp4,.mkv,.avi,...")
+        self.ext_edit.setText(",".join(config.get('video_extensions', config.DEFAULT_VIDEO_EXTENSIONS)))
+        self.ext_edit.setToolTip("支持的视频格式，用逗号或空格分隔")
+        form.addRow("视频格式:", self.ext_edit)
+
         layout.addLayout(form)
+
+        # 添加说明
+        tip_label = QLabel("💡 提示：支持所有常见视频格式，包括 .mp4, .mkv, .avi, .wmv, .flv, .webm, .m4v, .mov, .ts, .mpg, .mpeg, .rm, .rmvb 等")
+        tip_label.setWordWrap(True)
+        tip_label.setStyleSheet("color: #666; font-size: 12px;")
+        layout.addWidget(tip_label)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -1703,6 +1731,12 @@ class ConfigDialog(QDialog):
         self.config.set('target_dir', self.target_edit.text())
         self.config.set('tmdb_api_key', self.api_edit.text())
         self.config.set('move_mode', self.mode_combo.currentData())
+        # 解析视频格式配置
+        ext_text = self.ext_edit.text().strip()
+        # 支持逗号和空格分隔
+        exts = [ext.strip().lower() for ext in re.split(r'[,\s]+', ext_text) if ext.strip()]
+        if exts:
+            self.config.set('video_extensions', exts)
         self.config.save()
 
 
