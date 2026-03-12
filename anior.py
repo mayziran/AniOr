@@ -80,6 +80,28 @@ class Config:
         else:
             self.save()
 
+    @staticmethod
+    def check_duplicate_files(paths: List[Path], matched_files: set, parent=None) -> bool:
+        """
+        检查文件是否已匹配（标绿）
+        
+        Args:
+            paths: 要检查的文件路径列表
+            matched_files: 已匹配的文件集合
+            parent: 父窗口（用于弹窗）
+            
+        Returns:
+            True 如果有重复，False 如果没有重复
+        """
+        duplicates = [p for p in paths if p in matched_files]
+        if duplicates:
+            dup_names = '\n'.join(p.name for p in duplicates[:5])
+            if len(duplicates) > 5:
+                dup_names += f'\n... 还有 {len(duplicates) - 5} 个文件'
+            QMessageBox.warning(parent, "文件已匹配", f"以下文件已经在其他位置匹配（视频列表中标绿），不能重复添加：\n\n{dup_names}")
+            return True
+        return False
+
     def save_if_needed(self):
         if self._pending:
             self.save()
@@ -519,13 +541,21 @@ class EpisodeRow(QFrame):
             QMessageBox.warning(None, "警告", "单集模式只能匹配 1 个文件，请逐个拖放")
             return
 
+        # 先检测文件是否已匹配（标绿）- 防止重复添加
+        if self.parent_window:
+            matched_files = self.parent_window.get_matched_files()
+            # 排除当前行已匹配的文件（允许重新拖放同一文件）
+            if paths[0] in matched_files and paths[0] not in self.dropped_files:
+                Config.check_duplicate_files([paths[0]], matched_files, self)
+                return
+
         # 保存旧文件路径（用于移除）
         old_files = list(self.dropped_files)
-        
+
         # 更新 UI
         self.dropped_files = [paths[0]]
         self.set_matched(self.dropped_files)
-        
+
         # 发射信号（传递新旧文件路径）
         self.dropped.emit(self.season_num, self.episode_num, [paths[0]], old_files)
 
@@ -701,7 +731,14 @@ class ExtrasTab(QWidget):
                 self.remove_selected()
     
     def add_files(self, paths: List[Path]):
-        """添加文件到 extras"""
+        """添加文件到 extras - 检测标绿文件（已匹配）并报错"""
+        # 检测是否有文件已匹配（标绿）
+        if self.parent_window:
+            matched_files = self.parent_window.get_matched_files()
+            if Config.check_duplicate_files(paths, matched_files, self):
+                return
+        
+        # 添加文件
         added = 0
         for path in paths:
             # 验证文件存在性
@@ -1126,12 +1163,19 @@ class SeasonTab(QWidget):
             self.parent_window.statusBar.showMessage(f"已匹配 {sum(len(tab.file_mappings) for tab in self.parent_window.season_tabs.values())} 个文件")
 
     def handle_batch_drop(self, event, drop_type: str = "add"):
-        """处理批量拖放 - 只在批量模式下生效"""
+        """处理批量拖放 - 检测标绿文件（已匹配）并报错"""
         if self.match_mode != "batch":
             return  # 非批量模式忽略
 
         data = event.mimeData().data('application/x-video-files').data()
         paths = [Path(p.decode('utf-8')) for p in data.split(b'\n') if p]
+        
+        # 检测是否有文件已匹配（标绿）
+        if self.parent_window:
+            matched_files = self.parent_window.get_matched_files()
+            if Config.check_duplicate_files(paths, matched_files, self):
+                return
+        
         sorted_paths = sorted(paths, key=lambda p: p.name)
 
         if drop_type == "add":
@@ -1709,6 +1753,15 @@ class MainWindow(QMainWindow):
         self.refresh_folder_counts()
         # 只刷新视频列表高亮，不重新加载
         self._refresh_video_highlight()
+
+    def get_matched_files(self) -> set:
+        """获取所有已匹配的文件路径（用于拖放检查）"""
+        matched = set()
+        for tab in self.season_tabs.values():
+            matched.update(tab.file_mappings.keys())
+        if self.extras_tab:
+            matched.update(self.extras_tab.file_mappings.keys())
+        return matched
 
     def refresh_folder_counts(self):
         """刷新文件夹计数和颜色（不改变展开状态）"""
