@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QHeaderView, QStatusBar, QCheckBox, QComboBox,
     QDialog, QDialogButtonBox, QFormLayout, QTabWidget, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl
+from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl, QSettings, QByteArray
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices
 
 # 视频文件扩展名
@@ -32,12 +32,11 @@ else:
 CONFIG_PATH = CONFIG_DIR / 'config.json'
 
 
-# ==================== 配置管理 ====================
+# ==================== 用户配置管理 ====================
 class Config:
     DEFAULT = {
         'source_dir': '', 'target_dir': '', 'tmdb_api_key': '',
-        'window_width': 1400, 'window_height': 1000,  # 窗口更高
-        'splitter_ratio': [400, 900], 'move_mode': 'link',
+        'move_mode': 'link',
     }
 
     def __init__(self):
@@ -161,7 +160,7 @@ class SearchSelectDialog(QDialog):
         self.tmdb = tmdb
         self.selected_tv = None
         self.setWindowTitle(f"搜索结果：{query}")
-        self.setMinimumSize(800, 500)  # 增大默认尺寸
+        self.setMinimumSize(800, 500)
         self.resize(800, 500)
 
         layout = QVBoxLayout(self)
@@ -1035,7 +1034,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("AniOr - 动漫视频整理工具")
         self.setMinimumSize(1200, 800)
-        self.resize(self.config.get('window_width', 1400), self.config.get('window_height', 900))
+        self.resize(1400, 1000)  # 默认窗口大小
 
         # 保持线程引用
         self._workers = []
@@ -1098,7 +1097,7 @@ class MainWindow(QMainWindow):
         self.folder_tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
         self.folder_tree.header().setSectionResizeMode(1, QHeaderView.Interactive)
         self.folder_tree.header().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.folder_tree.setColumnWidth(0, 600)  # 文件夹 - 更宽
+        self.folder_tree.setColumnWidth(0, 600)  # 文件夹
         self.folder_tree.setColumnWidth(1, 90)   # 文件数
         self.folder_tree.setColumnWidth(2, 150)  # 日期
         self.folder_tree.header().setMinimumSectionSize(50)
@@ -1132,7 +1131,7 @@ class MainWindow(QMainWindow):
         self.video_list.header().setSectionResizeMode(0, QHeaderView.Interactive)
         self.video_list.header().setSectionResizeMode(1, QHeaderView.Interactive)
         self.video_list.header().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.video_list.setColumnWidth(0, 560)  # 文件名 - 更宽
+        self.video_list.setColumnWidth(0, 560)  # 文件名
         self.video_list.setColumnWidth(1, 100)  # 大小
         self.video_list.setColumnWidth(2, 180)  # 日期
         self.video_list.header().setMinimumSectionSize(50)
@@ -1572,13 +1571,43 @@ class MainWindow(QMainWindow):
                 self.tmdb = TMDBClient(self.config.get('tmdb_api_key'))
 
     def closeEvent(self, event):
-        self.config.set('window_width', self.width())
-        self.config.set('window_height', self.height())
-        self.config.save()
+        # 使用 Qt 标准方式保存窗口状态
+        settings = QSettings("AniOr", "AniOr")
+        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("windowState", self.saveState())
+        settings.setValue("splitterState", self.centralWidget().findChild(QSplitter).saveState())
+        settings.setValue("folderTreeHeaderState", self.folder_tree.header().saveState())
+        settings.setValue("videoTreeHeaderState", self.video_list.header().saveState())
+        
+        # 保存用户配置
+        self.config.save_if_needed()
         event.accept()
 
     def showEvent(self, event):
         super().showEvent(event)
+        # 恢复窗口状态
+        settings = QSettings("AniOr", "AniOr")
+        geometry = settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        
+        # 恢复 splitter 状态
+        splitter = self.centralWidget().findChild(QSplitter)
+        if splitter:
+            splitterState = settings.value("splitterState")
+            if splitterState:
+                splitter.restoreState(splitterState)
+        
+        # 恢复表头状态（列宽、顺序、排序）
+        folderTreeHeaderState = settings.value("folderTreeHeaderState")
+        if folderTreeHeaderState:
+            self.folder_tree.header().restoreState(folderTreeHeaderState)
+        
+        videoTreeHeaderState = settings.value("videoTreeHeaderState")
+        if videoTreeHeaderState:
+            self.video_list.header().restoreState(videoTreeHeaderState)
+        
+        # 延迟加载文件夹
         QTimer.singleShot(500, lambda: self.load_anime_folders())
 
 
