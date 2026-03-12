@@ -513,6 +513,25 @@ class EpisodeRow(QFrame):
         self.dropped.emit(self.season_num, self.episode_num, [paths[0]], old_files)
 
 
+class VideoTreeItem(QTreeWidgetItem):
+    """支持数值排序的视频列表项"""
+    def __lt__(self, other):
+        """自定义比较：按 UserRole 数值排序"""
+        column = self.treeWidget().header().sortIndicatorSection()
+        
+        # 获取 UserRole 数据
+        self_data = self.data(column, Qt.UserRole)
+        other_data = other.data(column, Qt.UserRole)
+        
+        # 如果都有数值数据，按数值比较
+        if self_data is not None and other_data is not None:
+            if isinstance(self_data, (int, float)) and isinstance(other_data, (int, float)):
+                return self_data < other_data
+        
+        # 否则按文本比较
+        return self.text(column).lower() < other.text(column).lower()
+
+
 class VideoTreeWidget(QTreeWidget):
     """支持拖放的视频列表"""
     def __init__(self, parent=None):
@@ -1345,12 +1364,14 @@ class MainWindow(QMainWindow):
         from datetime import datetime
         items = []
         for v in videos:
-            item = QTreeWidgetItem()
+            item = VideoTreeItem()
             is_matched = v in matched_files
             item.setText(0, "✓ " + v.name if is_matched else v.name)
+            # 大小：显示格式化文本，UserRole 存储原始字节数用于排序
             size_mb = v.stat().st_size / 1024 / 1024
             item.setText(1, f"{size_mb:.1f} MB")
             item.setData(1, Qt.UserRole, v.stat().st_size)
+            # 日期：显示完整日期时间，UserRole 存储时间戳用于排序
             date_str = datetime.fromtimestamp(v.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
             item.setText(2, date_str)
             item.setData(2, Qt.UserRole, v.stat().st_mtime)
