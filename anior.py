@@ -904,8 +904,7 @@ class ExtrasTab(QWidget):
 
         if added > 0 and self.parent_window:
             self.parent_window._update_status()
-            self.parent_window._refresh_video_highlight()
-    
+
     def remove_file(self, path: Path):
         """移除指定文件"""
         if path in self.file_mappings:
@@ -918,8 +917,7 @@ class ExtrasTab(QWidget):
                 break
         if self.parent_window:
             self.parent_window._update_status()
-            self.parent_window._refresh_video_highlight()
-    
+
     def remove_item(self, item):
         """移除单个文件"""
         path = item.data(0, Qt.UserRole)
@@ -928,20 +926,18 @@ class ExtrasTab(QWidget):
         self.file_list.takeTopLevelItem(self.file_list.indexOfTopLevelItem(item))
         if self.parent_window:
             self.parent_window._update_status()
-            self.parent_window._refresh_video_highlight()
-    
+
     def remove_selected(self):
         """移除选中的文件"""
         for item in self.file_list.selectedItems():
             self.remove_item(item)
-    
+
     def clear_all(self):
         """清空所有 extras 文件"""
         self.file_mappings.clear()
         self.file_list.clear()
         if self.parent_window:
             self.parent_window._update_status()
-            self.parent_window._refresh_video_highlight()
     
     def dragEnterEvent(self, event: QDragEnterEvent):
         """拖放进入"""
@@ -1260,10 +1256,7 @@ class SeasonTab(QWidget):
 
         self._update_buttons()
         if self.parent_window:
-            # 刷新文件夹计数和视频列表高亮
-            self.parent_window.refresh_folder_counts()
-            self.parent_window._refresh_video_highlight()
-            self.parent_window.statusBar.showMessage(f"已匹配 {sum(len(tab.file_mappings) for tab in self.parent_window.season_tabs.values())} 个文件")
+            self.parent_window._update_status(new_paths)
 
     def _on_cancel_match(self, season_num: int, episode_num: int):
         """取消单集匹配"""
@@ -1274,7 +1267,8 @@ class SeasonTab(QWidget):
                 row = item.widget()
                 if row.season_num == season_num and row.episode_num == episode_num:
                     # 从 file_mappings 移除
-                    for path in list(row.dropped_files):
+                    old_paths = list(row.dropped_files)
+                    for path in old_paths:
                         if path in self.file_mappings:
                             del self.file_mappings[path]
                     row.reset()
@@ -1284,10 +1278,7 @@ class SeasonTab(QWidget):
         self._sync_batch_from_mappings()
         self._update_buttons()
         if self.parent_window:
-            # 刷新文件夹计数和视频列表高亮
-            self.parent_window.refresh_folder_counts()
-            self.parent_window._refresh_video_highlight()
-            self.parent_window.statusBar.showMessage(f"已匹配 {sum(len(tab.file_mappings) for tab in self.parent_window.season_tabs.values())} 个文件")
+            self.parent_window._update_status(old_paths)
 
     def handle_batch_drop(self, event, drop_type: str = "add"):
         """处理批量拖放 - 检测标绿文件（已匹配）并报错"""
@@ -1315,6 +1306,10 @@ class SeasonTab(QWidget):
             self.batch_paths = sorted(existing_paths, key=lambda p: p.name)
         else:  # sort
             # 覆盖模式：替换当前列表，按文件名排序
+            # 先清除旧的 file_mappings
+            for old_path in self.batch_paths:
+                if old_path in self.file_mappings:
+                    del self.file_mappings[old_path]
             self.batch_paths = sorted_paths
 
         # 更新 file_mappings
@@ -1329,7 +1324,7 @@ class SeasonTab(QWidget):
 
         # 通知主窗口刷新高亮（实时高亮）
         if self.parent_window:
-            self.parent_window._update_status()
+            self.parent_window._update_status(sorted_paths)
 
     def _sync_batch_from_mappings(self):
         """根据 file_mappings 同步批量列表（处理单集取消后的情况）"""
@@ -1466,6 +1461,7 @@ class MainWindow(QMainWindow):
         self.file_mappings: Dict[Path, str] = {}
         self.season_tabs: Dict[int, SeasonTab] = {}
         self._folder_video_cache: Dict[Path, List[Path]] = {}  # 文件夹视频缓存
+        self._first_show = True  # 首次启动标记
 
         self.setWindowTitle("AniOr - 动漫视频整理工具")
         self.setMinimumSize(1200, 800)
@@ -1501,6 +1497,12 @@ class MainWindow(QMainWindow):
         refresh_btn = QPushButton("🔄 刷新文件夹")
         refresh_btn.clicked.connect(self.load_anime_folders)
         tl.addWidget(refresh_btn)
+        
+        self.refresh_video_btn = QPushButton("🔄 刷新该文件夹视频列表")
+        self.refresh_video_btn.clicked.connect(self.on_refresh_video_clicked)
+        self.refresh_video_btn.setEnabled(False)
+        tl.addWidget(self.refresh_video_btn)
+        
         tl.addStretch()
 
         config_btn = QPushButton("⚙️ 设置")
@@ -1661,7 +1663,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
 
     def load_anime_folders(self):
-        """加载动漫文件夹（支持子文件夹折叠/展开）"""
+        """加载动漫文件夹（只加载一级文件夹名称）"""
         source = self.config.get('source_dir')
         if not source:
             QMessageBox.warning(self, "警告", "请先在设置中配置源目录")
@@ -1674,11 +1676,6 @@ class MainWindow(QMainWindow):
         # 清空缓存
         self._folder_video_cache.clear()
 
-        # 从所有季度收集已匹配的文件
-        matched_files = set()
-        for tab in self.season_tabs.values():
-            matched_files.update(tab.file_mappings.keys())
-
         self.folder_tree.clear()
         folders = [d for d in source_path.iterdir() if d.is_dir()]
 
@@ -1686,62 +1683,20 @@ class MainWindow(QMainWindow):
         self.folder_tree.setUpdatesEnabled(False)
 
         from datetime import datetime
-        items_to_add = []
         for folder in folders:
             item = FolderTreeItem()
             item.setText(0, folder.name)
-
-            # 使用缓存统计视频文件
-            all_video_files = self._get_folder_videos(folder)
-            matched_count = sum(1 for f in all_video_files if f in matched_files)
-            total_count = len(all_video_files)
-
-            item.setText(1, f"{matched_count}/{total_count}")
-            item.setData(1, Qt.UserRole, total_count)  # 存储总数用于排序
-            
-            date_timestamp = folder.stat().st_mtime
-            item.setText(2, datetime.fromtimestamp(date_timestamp).strftime('%Y-%m-%d %H:%M'))
-            item.setData(2, Qt.UserRole, date_timestamp)  # 存储时间戳用于排序
+            item.setText(1, "-")  # 占位，点击时才加载
+            item.setText(2, datetime.fromtimestamp(folder.stat().st_mtime).strftime('%Y-%m-%d %H:%M'))
             item.setData(0, Qt.UserRole, folder)
-
-            # 如果所有视频都已匹配，用绿色标注
-            is_all_matched = total_count > 0 and matched_count == total_count
-            apply_highlight(item, is_all_matched)
-
-            # 添加子文件夹（只显示包含视频文件的子文件夹）
-            subfolders = [d for d in folder.iterdir() if d.is_dir()]
-            for sub in subfolders:
-                sub_video_files = self._get_folder_videos(sub)
-                # 跳过没有视频文件的子文件夹
-                if not sub_video_files:
-                    continue
-
-                child = FolderTreeItem()
-                child.setText(0, "📁 " + sub.name)
-
-                sub_matched = sum(1 for f in sub_video_files if f in matched_files)
-
-                child.setText(1, f"{sub_matched}/{len(sub_video_files)}")
-                child.setData(1, Qt.UserRole, len(sub_video_files))  # 存储总数用于排序
-
-                sub_date_timestamp = sub.stat().st_mtime
-                child.setText(2, datetime.fromtimestamp(sub_date_timestamp).strftime('%Y-%m-%d %H:%M'))
-                child.setData(2, Qt.UserRole, sub_date_timestamp)  # 存储时间戳用于排序
-                child.setData(0, Qt.UserRole, sub)
-
-                is_sub_matched = len(sub_video_files) > 0 and sub_matched == len(sub_video_files)
-                apply_highlight(child, is_sub_matched)
-
-                item.addChild(child)
-
-            items_to_add.append(item)
             item.setExpanded(False)
 
-        self.folder_tree.addTopLevelItems(items_to_add)
+            self.folder_tree.addTopLevelItem(item)
+        
         self.folder_tree.setUpdatesEnabled(True)
 
     def on_folder_selected(self, item):
-        """点击文件夹（支持子文件夹）加载视频"""
+        """点击文件夹加载视频和子文件夹信息"""
         folder = item.data(0, Qt.UserRole)
         if not folder:
             return
@@ -1754,19 +1709,88 @@ class MainWindow(QMainWindow):
         is_subfolder = parent_text.startswith("📁 ")
 
         if is_subfolder:
-            # 子文件夹：加载该子文件夹下的所有视频
-            videos = sorted(self._get_folder_videos(folder), key=lambda x: x.name)
+            # 子文件夹：只加载该子文件夹根目录的视频（不包含更深层子文件夹）
+            self._load_videos_to_list(folder, item, root_only=True)
         else:
-            # 主文件夹：只加载根目录下的视频（不包含子文件夹）
-            videos = sorted([f for f in folder.glob('*') if f.is_file() and f.suffix.lower() in self._video_extensions], key=lambda x: x.name)
+            # 主文件夹：加载该文件夹的完整信息（统计、高亮、子文件夹、视频列表）
+            self._load_folder_full_info(folder, item)
 
+    def _load_folder_full_info(self, folder, item):
+        """加载一级文件夹的完整信息（统计、高亮、子文件夹、视频列表）"""
         # 从所有季度和 extras 收集已匹配的文件
         matched_files = set()
         for tab in self.season_tabs.values():
             matched_files.update(tab.file_mappings.keys())
-        # 加上 extras 标签页
         if self.extras_tab:
             matched_files.update(self.extras_tab.file_mappings.keys())
+
+        # 扫描该文件夹的所有视频（包含子文件夹）
+        all_video_files = self._get_folder_videos(folder)
+        matched_count = sum(1 for f in all_video_files if f in matched_files)
+        total_count = len(all_video_files)
+
+        # 更新统计和高亮
+        item.setText(1, f"{matched_count}/{total_count}")
+        is_all_matched = total_count > 0 and matched_count == total_count
+        apply_highlight(item, is_all_matched)
+
+        # 清除现有子文件夹
+        item.takeChildren()
+
+        # 递归添加子文件夹（支持多级）
+        self._add_subfolders_recursive(folder, item, matched_files)
+
+        # 展开父文件夹
+        item.setExpanded(True)
+
+        # 启用刷新视频列表按钮
+        self.refresh_video_btn.setEnabled(True)
+
+        # 加载根目录视频到左下（不包含子文件夹）
+        self._load_videos_to_list(folder, item, root_only=True)
+
+    def _add_subfolders_recursive(self, parent_folder, parent_item, matched_files):
+        """递归添加子文件夹（支持多级，每级独立统计和高亮）"""
+        subfolders = [d for d in parent_folder.iterdir() if d.is_dir()]
+
+        for sub in subfolders:
+            # 获取该子文件夹的所有视频（包含其子文件夹）
+            sub_video_files = self._get_folder_videos(sub)
+            if not sub_video_files:
+                continue
+
+            child = FolderTreeItem()
+            child.setText(0, "📁 " + sub.name)
+
+            # 计算已匹配数量
+            sub_matched = sum(1 for f in sub_video_files if f in matched_files)
+            child.setText(1, f"{sub_matched}/{len(sub_video_files)}")
+            child.setData(0, Qt.UserRole, sub)
+
+            # 高亮判断：所有视频（包含子文件夹）都匹配才高亮
+            is_sub_matched = len(sub_video_files) > 0 and sub_matched == len(sub_video_files)
+            apply_highlight(child, is_sub_matched)
+            parent_item.addChild(child)
+
+            # 递归添加下一级子文件夹
+            self._add_subfolders_recursive(sub, child, matched_files)
+
+    def _load_videos_to_list(self, folder, item=None, root_only=False):
+        """加载视频到左下列表"""
+        # 从所有季度和 extras 收集已匹配的文件
+        matched_files = set()
+        for tab in self.season_tabs.values():
+            matched_files.update(tab.file_mappings.keys())
+        if self.extras_tab:
+            matched_files.update(self.extras_tab.file_mappings.keys())
+
+        # 加载视频
+        if root_only:
+            # 只加载根目录视频
+            videos = sorted([f for f in folder.glob('*') if f.is_file() and f.suffix.lower() in self._video_extensions], key=lambda x: x.name)
+        else:
+            # 加载该文件夹的所有视频（包含子文件夹）
+            videos = sorted(self._get_folder_videos(folder), key=lambda x: x.name)
 
         # 批量 UI 更新
         self.video_list.setUpdatesEnabled(False)
@@ -1779,11 +1803,9 @@ class MainWindow(QMainWindow):
             item = VideoTreeItem()
             is_matched = v in matched_files
             item.setText(0, "✓ " + v.name if is_matched else v.name)
-            # 大小：显示格式化文本，UserRole 存储原始字节数用于排序
             size_mb = v.stat().st_size / 1024 / 1024
             item.setText(1, f"{size_mb:.1f} MB")
             item.setData(1, Qt.UserRole, v.stat().st_size)
-            # 日期：显示完整日期时间，UserRole 存储时间戳用于排序
             date_str = datetime.fromtimestamp(v.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
             item.setText(2, date_str)
             item.setData(2, Qt.UserRole, v.stat().st_mtime)
@@ -1795,6 +1817,29 @@ class MainWindow(QMainWindow):
         self.video_list.setSortingEnabled(True)
         self.video_list.setUpdatesEnabled(True)
         self.statusBar.showMessage(f"已加载 {len(videos)} 个视频文件 - {folder.name}")
+
+    def on_refresh_video_clicked(self):
+        """点击刷新视频列表按钮"""
+        if self.current_folder:
+            # 只清空当前文件夹的缓存
+            if self.current_folder in self._folder_video_cache:
+                del self._folder_video_cache[self.current_folder]
+            
+            # 重新扫描当前文件夹
+            item = self.folder_tree.currentItem()
+            if item:
+                # 检查是否是子文件夹
+                parent_text = item.text(0)
+                is_subfolder = parent_text.startswith("📁 ")
+                
+                if is_subfolder:
+                    # 子文件夹：重新加载视频
+                    self._load_videos_to_list(self.current_folder, item)
+                else:
+                    # 主文件夹：重新加载完整信息
+                    self._load_folder_full_info(self.current_folder, item)
+            
+            self.statusBar.showMessage(f"已刷新视频列表 - {self.current_folder.name}")
 
     def _on_video_selection_changed(self):
         """视频列表选择变化时显示选中数量"""
@@ -1870,16 +1915,121 @@ class MainWindow(QMainWindow):
         self._folder_video_cache[folder] = videos
         return videos
 
-    def _update_status(self):
+    def _update_status(self, specific_paths=None):
+        """
+        更新状态（拖动视频后调用）
+
+        Args:
+            specific_paths: 指定要刷新的视频路径列表，如果为 None 则刷新所有已展开的文件夹
+        """
         total = sum(len(tab.file_mappings) for tab in self.season_tabs.values())
-        # 加上 extras 标签页的文件
         if self.extras_tab:
             total += len(self.extras_tab.file_mappings)
         self.statusBar.showMessage(f"已匹配 {total} 个文件")
-        # 刷新文件夹计数和颜色
-        self.refresh_folder_counts()
-        # 只刷新视频列表高亮，不重新加载
+
+        # 刷新视频列表高亮
         self._refresh_video_highlight()
+
+        # 刷新已展开的文件夹高亮（轻量级操作）
+        self._refresh_expanded_folders(specific_paths)
+
+    def _refresh_expanded_folders(self, specific_paths=None):
+        """
+        刷新文件夹高亮（轻量级）
+
+        Args:
+            specific_paths: 指定要刷新的视频路径列表，如果为 None 则刷新所有已展开的文件夹
+        """
+        matched_files = self.get_matched_files()
+
+        if specific_paths:
+            # 指定了视频路径：只刷新这些视频所属的文件夹
+            folders_to_refresh = set()
+            for path in specific_paths:
+                # 找到该视频所属的主文件夹
+                folder = self._find_parent_folder(path)
+                if folder and self._is_folder_expanded(folder):
+                    folders_to_refresh.add(folder)
+
+            for folder in folders_to_refresh:
+                self._refresh_single_folder(folder, matched_files)
+        else:
+            # 未指定路径：刷新所有已展开的文件夹
+            for i in range(self.folder_tree.topLevelItemCount()):
+                parent = self.folder_tree.topLevelItem(i)
+                folder = parent.data(0, Qt.UserRole)
+                if not folder:
+                    continue
+
+                # 只刷新已展开的文件夹
+                if not parent.isExpanded():
+                    continue
+
+                self._refresh_single_folder(folder, matched_files)
+
+    def _find_parent_folder(self, video_path: Path) -> Optional[Path]:
+        """查找视频所属的主文件夹（一级子目录）"""
+        source = self.config.get('source_dir')
+        if not source:
+            return None
+
+        source_path = Path(source)
+        try:
+            # 获取相对于源目录的路径
+            rel_path = video_path.relative_to(source_path)
+            # 第一级目录就是主文件夹
+            return source_path / rel_path.parts[0]
+        except ValueError:
+            # 视频不在源目录下
+            return None
+
+    def _is_folder_expanded(self, folder: Path) -> bool:
+        """检查文件夹是否已展开"""
+        for i in range(self.folder_tree.topLevelItemCount()):
+            item = self.folder_tree.topLevelItem(i)
+            if item.data(0, Qt.UserRole) == folder:
+                return item.isExpanded()
+        return False
+
+    def _refresh_single_folder(self, folder, matched_files):
+        """刷新单个文件夹及其子文件夹的高亮"""
+        for i in range(self.folder_tree.topLevelItemCount()):
+            parent = self.folder_tree.topLevelItem(i)
+            if parent.data(0, Qt.UserRole) == folder:
+                # 使用缓存统计视频文件
+                all_video_files = self._folder_video_cache.get(folder, [])
+
+                matched_count = sum(1 for f in all_video_files if f in matched_files)
+                total_count = len(all_video_files)
+
+                # 更新计数和高亮
+                parent.setText(1, f"{matched_count}/{total_count}")
+                is_all_matched = total_count > 0 and matched_count == total_count
+                apply_highlight(parent, is_all_matched)
+
+                # 递归更新子文件夹
+                self._refresh_expanded_subfolders(parent, matched_files)
+                break
+
+    def _refresh_expanded_subfolders(self, item, matched_files):
+        """递归刷新已展开的子文件夹高亮"""
+        for i in range(item.childCount()):
+            child = item.child(i)
+            folder = child.data(0, Qt.UserRole)
+            if not folder:
+                continue
+
+            # 使用缓存统计
+            all_video_files = self._folder_video_cache.get(folder, [])
+            
+            sub_matched = sum(1 for f in all_video_files if f in matched_files)
+            child.setText(1, f"{sub_matched}/{len(all_video_files)}")
+            is_sub_matched = len(all_video_files) > 0 and sub_matched == len(all_video_files)
+            apply_highlight(child, is_sub_matched)
+
+            # 递归更新下一级（只递归已展开的子文件夹）
+            if child.isExpanded():
+                self._refresh_expanded_subfolders(child, matched_files)
 
     def get_matched_files(self) -> set:
         """获取所有已匹配的文件路径（用于拖放检查）"""
@@ -1889,55 +2039,6 @@ class MainWindow(QMainWindow):
         if self.extras_tab:
             matched.update(self.extras_tab.file_mappings.keys())
         return matched
-
-    def refresh_folder_counts(self):
-        """刷新文件夹计数和颜色（不改变展开状态）"""
-        matched_files = set()
-        for tab in self.season_tabs.values():
-            matched_files.update(tab.file_mappings.keys())
-        # 加上 extras 标签页
-        if self.extras_tab:
-            matched_files.update(self.extras_tab.file_mappings.keys())
-
-        # 批量 UI 更新
-        self.folder_tree.setUpdatesEnabled(False)
-
-        # 遍历所有文件夹项，只更新计数和颜色
-        for i in range(self.folder_tree.topLevelItemCount()):
-            parent = self.folder_tree.topLevelItem(i)
-            folder = parent.data(0, Qt.UserRole)
-            if not folder:
-                continue
-
-            # 使用缓存统计视频文件
-            all_video_files = self._get_folder_videos(folder)
-            matched_count = sum(1 for f in all_video_files if f in matched_files)
-            total_count = len(all_video_files)
-
-            # 更新计数（第 1 列是文件数列）
-            parent.setText(1, f"{matched_count}/{total_count}")
-
-            # 更新颜色
-            is_all_matched = total_count > 0 and matched_count == total_count
-            apply_highlight(parent, is_all_matched)
-
-            # 更新子文件夹
-            for j in range(parent.childCount()):
-                child = parent.child(j)
-                sub = child.data(0, Qt.UserRole)
-                if not sub:
-                    continue
-
-                sub_video_files = self._get_folder_videos(sub)
-                sub_matched = sum(1 for f in sub_video_files if f in matched_files)
-
-                # 更新计数（第 1 列是文件数列）
-                child.setText(1, f"{sub_matched}/{len(sub_video_files)}")
-
-                is_sub_matched = len(sub_video_files) > 0 and sub_matched == len(sub_video_files)
-                apply_highlight(child, is_sub_matched)
-
-        self.folder_tree.setUpdatesEnabled(True)
 
     def _refresh_video_highlight(self):
         """刷新视频列表的高亮显示（不重新加载）"""
@@ -2234,30 +2335,35 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # 恢复窗口状态
-        settings = QSettings("AniOr", "AniOr")
-        geometry = settings.value("geometry")
-        if geometry:
-            self.restoreGeometry(geometry)
         
-        # 恢复 splitter 状态
-        splitter = self.centralWidget().findChild(QSplitter)
-        if splitter:
-            splitterState = settings.value("splitterState")
-            if splitterState:
-                splitter.restoreState(splitterState)
-        
-        # 恢复表头状态（列宽、顺序、排序）
-        folderTreeHeaderState = settings.value("folderTreeHeaderState")
-        if folderTreeHeaderState:
-            self.folder_tree.header().restoreState(folderTreeHeaderState)
-        
-        videoTreeHeaderState = settings.value("videoTreeHeaderState")
-        if videoTreeHeaderState:
-            self.video_list.header().restoreState(videoTreeHeaderState)
-        
-        # 延迟加载文件夹
-        QTimer.singleShot(500, lambda: self.load_anime_folders())
+        # 只在首次启动时加载文件夹
+        if self._first_show:
+            self._first_show = False
+            
+            # 恢复窗口状态
+            settings = QSettings("AniOr", "AniOr")
+            geometry = settings.value("geometry")
+            if geometry:
+                self.restoreGeometry(geometry)
+
+            # 恢复 splitter 状态
+            splitter = self.centralWidget().findChild(QSplitter)
+            if splitter:
+                splitterState = settings.value("splitterState")
+                if splitterState:
+                    splitter.restoreState(splitterState)
+
+            # 恢复表头状态（列宽、顺序、排序）
+            folderTreeHeaderState = settings.value("folderTreeHeaderState")
+            if folderTreeHeaderState:
+                self.folder_tree.header().restoreState(folderTreeHeaderState)
+
+            videoTreeHeaderState = settings.value("videoTreeHeaderState")
+            if videoTreeHeaderState:
+                self.video_list.header().restoreState(videoTreeHeaderState)
+
+            # 延迟加载文件夹
+            QTimer.singleShot(500, lambda: self.load_anime_folders())
 
 
 # ==================== 配置对话框 ====================
