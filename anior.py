@@ -1104,6 +1104,7 @@ class SeasonTab(QWidget):
         match_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.match_list_widget = QWidget()
+        self.match_list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.match_list_layout = QVBoxLayout(self.match_list_widget)
         self.match_list_layout.setContentsMargins(4, 4, 4, 4)
         self.match_list_layout.setSpacing(2)
@@ -1222,6 +1223,7 @@ class SeasonTab(QWidget):
         worker = SeasonWorker(self.tmdb, self.tv_id, self.season_num)
         self._workers.append(worker)  # 保持线程引用防止被 GC 回收
         worker.finished.connect(self._on_episodes_loaded)
+        worker.finished.connect(lambda: self._workers.remove(worker))  # 完成后移除引用，防止内存泄漏
         worker.start()
 
     def _on_episodes_loaded(self, season_num: int, details: dict):
@@ -2153,7 +2155,7 @@ class MainWindow(QMainWindow):
             success, fail = 0, 0
             fail_details = []  # 记录失败详情
             extras_files = []  # 收集 extras 文件（包括 extras 标签页和 auto_extras 的）
-            processed_files = set(self.file_mappings.keys())  # 记录所有已处理的文件（包括字幕）
+            processed_files = set(self.file_mappings.keys())  # 记录所有已处理的文件（初始为视频文件，后续会添加字幕）
 
             # 1. 收集 extras 标签页的文件
             for src, ep_key in self.file_mappings.items():

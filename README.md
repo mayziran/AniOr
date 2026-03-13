@@ -7,7 +7,7 @@
 写这个工具的原因是：动漫组资源的命名非常复杂，还有各种 SP、特典等额外内容。尝试过自动整理工具，但发现它们很难准确自动整理番剧日漫。因此写了这个手动匹配整理工具，通过可视化的方式手动匹配每一集，确保整理准确无误。
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
 ![PyQt5](https://img.shields.io/badge/PyQt5-5.15+-green.svg)
 
 ## 功能特点
