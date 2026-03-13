@@ -295,16 +295,6 @@ class OrganizeResultDialog(QDialog):
 
 
 # ==================== 工作线程 ====================
-class SearchWorker(QThread):
-    finished = pyqtSignal(list)
-    def __init__(self, tmdb: TMDBClient, query: str):
-        super().__init__()
-        self.tmdb = tmdb
-        self.query = query
-    def run(self):
-        self.finished.emit(self.tmdb.search_tv(self.query))
-
-
 class SeasonWorker(QThread):
     finished = pyqtSignal(int, dict)
     def __init__(self, tmdb: TMDBClient, tv_id: int, season_num: int):
@@ -2084,6 +2074,52 @@ class MainWindow(QMainWindow):
         self.video_list.setSortingEnabled(True)
         self.video_list.setUpdatesEnabled(True)
 
+    def _move_subtitles(self, video_src: Path, target_folder: Path, ep_key: Optional[str], processed_files: set, mode: str) -> Tuple[int, List[Tuple[Path, Path, str]]]:
+        """
+        处理视频文件关联的字幕文件
+
+        Args:
+            video_src: 视频文件路径
+            target_folder: 目标文件夹
+            ep_key: 集数标识（如 "S01E01"），如果为 None 则不重命名
+            processed_files: 已处理文件集合
+            mode: 整理模式
+
+        Returns:
+            (success_count, fail_details) 元组
+            - success_count: 成功处理的字幕数量
+            - fail_details: 失败详情列表 [(src, dst, error), ...]
+        """
+        success = 0
+        fail_details = []
+
+        video_filename = video_src.stem
+        video_parent = video_src.parent
+
+        # 收集关联字幕文件
+        sub_files_to_move = []
+        for f in video_parent.iterdir():
+            if f.is_file() and f.name.startswith(f"{video_filename}.") and f != video_src:
+                if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                    if f not in processed_files:
+                        sub_files_to_move.append(f)
+
+        # 处理字幕文件
+        for sub_src in sub_files_to_move:
+            if ep_key:
+                sub_dst = target_folder / f"{ep_key} - {sub_src.name}"
+            else:
+                sub_dst = target_folder / sub_src.name
+
+            ok, error = FileOperator.operate(sub_src, sub_dst, mode)
+            if ok:
+                success += 1
+                processed_files.add(sub_src)
+            else:
+                fail_details.append((sub_src, sub_dst, error))
+
+        return success, fail_details
+
     def start_link(self):
         try:
             # 收集所有映射
@@ -2168,31 +2204,15 @@ class MainWindow(QMainWindow):
                     success += 1
                 else:
                     fail += 1
-                    fail_details.append((src, dst, error))  # 存储完整路径
+                    fail_details.append((src, dst, error))
                     continue
 
-                # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
-                # 例如：视频名.mkv → 视频名.ass、视频名.chs.ass、视频名.jpn.ass 等
-                video_filename = src.stem
-                video_parent = src.parent
-
-                # 先收集关联文件（避免遍历时修改目录）
-                sub_files_to_move = []
-                for f in video_parent.iterdir():
-                    if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
-                        if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
-                            sub_files_to_move.append(f)
-
-                # 处理字幕文件
-                for sub_src in sub_files_to_move:
-                    sub_dst = folder / f"{ep_key} - {sub_src.name}"
-                    ok, error = FileOperator.operate(sub_src, sub_dst, mode)
-                    if ok:
-                        success += 1
-                        processed_files.add(sub_src)  # 记录已处理的字幕
-                    else:
-                        fail += 1
-                        fail_details.append((sub_src, sub_dst, error))  # 存储完整路径
+                # 处理关联字幕文件
+                sub_success, sub_fail = self._move_subtitles(src, folder, ep_key, processed_files, mode)
+                success += sub_success
+                for sub_src, sub_dst, error in sub_fail:
+                    fail += 1
+                    fail_details.append((sub_src, sub_dst, error))
 
             # 4. 处理所有 extras 文件（不重命名）
             extras_folder = target_path / f"{tv_name} ({year})" / "extras"
@@ -2204,32 +2224,16 @@ class MainWindow(QMainWindow):
                     ok, error = FileOperator.operate(src, dst, mode)
                     if ok:
                         success += 1
-                        processed_files.add(src)  # 记录已处理的 extras 文件
-                        # 处理关联字幕文件（查找所有以"视频文件名."开头的字幕文件）
-                        video_filename = src.stem
-                        video_parent = src.parent
-
-                        # 先收集关联文件
-                        sub_files_to_move = []
-                        for f in video_parent.iterdir():
-                            if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
-                                if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
-                                    sub_files_to_move.append(f)
-
-                        # 处理字幕文件
-                        for sub_src in sub_files_to_move:
-                            if sub_src not in processed_files:  # 避免重复处理
-                                sub_dst = extras_folder / sub_src.name
-                                ok, error = FileOperator.operate(sub_src, sub_dst, mode)
-                                if ok:
-                                    success += 1
-                                    processed_files.add(sub_src)  # 记录已处理的字幕
-                                else:
-                                    fail += 1
-                                    fail_details.append((sub_src, sub_dst, error))  # 存储完整路径
+                        processed_files.add(src)
+                        # 处理关联字幕文件
+                        sub_success, sub_fail = self._move_subtitles(src, extras_folder, None, processed_files, mode)
+                        success += sub_success
+                        for sub_src, sub_dst, error in sub_fail:
+                            fail += 1
+                            fail_details.append((sub_src, sub_dst, error))
                     else:
                         fail += 1
-                        fail_details.append((src, dst, error))  # 存储完整路径
+                        fail_details.append((src, dst, error))
 
             # 生成.embyignore 文件（如果开启）
             if self.config.get('embyignore_extras', True) and extras_files:
@@ -2291,25 +2295,17 @@ class MainWindow(QMainWindow):
                         extras_folder = target_path / f"{tv_name} ({year})" / "extras"
                         extras_folder.mkdir(parents=True, exist_ok=True)
                         processed_subs = set()
-                        
+
                         for src in selected_files:
                             if src.exists():
                                 dst = extras_folder / src.name
                                 ok, error = FileOperator.operate(src, dst, mode)
                                 if ok:
                                     extras_move_count += 1
-                                    video_filename = src.stem
-                                    video_parent = src.parent
-                                    for f in video_parent.iterdir():
-                                        if f.is_file() and f.name.startswith(f"{video_filename}.") and f != src:
-                                            if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
-                                                if f not in processed_subs:
-                                                    sub_dst = extras_folder / f.name
-                                                    ok, error = FileOperator.operate(f, sub_dst, mode)
-                                                    if ok:
-                                                        extras_move_count += 1
-                                                        processed_subs.add(f)
-                        
+                                    # 处理关联字幕文件
+                                    sub_success, _ = self._move_subtitles(src, extras_folder, None, processed_subs, mode)
+                                    extras_move_count += sub_success
+
                         QMessageBox.information(self, "完成", f"已{mode_name} {extras_move_count} 个文件到 extras 文件夹")
 
             # 不清空映射，保持按钮可用（用户可以修改映射后重新整理，或整理下一个动漫）
