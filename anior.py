@@ -1716,29 +1716,30 @@ class MainWindow(QMainWindow):
             self._load_folder_full_info(folder, item)
 
     def _load_folder_full_info(self, folder, item):
-        """加载一级文件夹的完整信息（统计、高亮、子文件夹、视频列表）"""
-        # 从所有季度和 extras 收集已匹配的文件
-        matched_files = set()
-        for tab in self.season_tabs.values():
-            matched_files.update(tab.file_mappings.keys())
-        if self.extras_tab:
-            matched_files.update(self.extras_tab.file_mappings.keys())
+        """加载一级文件夹的完整信息（首次点击时加载子文件夹）"""
+        # 检查是否已加载过子文件夹（通过子项数量判断）
+        has_subfolders = item.childCount() > 0
 
-        # 扫描该文件夹的所有视频（包含子文件夹）
-        all_video_files = self._get_folder_videos(folder)
-        matched_count = sum(1 for f in all_video_files if f in matched_files)
-        total_count = len(all_video_files)
+        if not has_subfolders:
+            # 首次加载：需要收集已匹配文件用于添加子文件夹
+            matched_files = set()
+            for tab in self.season_tabs.values():
+                matched_files.update(tab.file_mappings.keys())
+            if self.extras_tab:
+                matched_files.update(self.extras_tab.file_mappings.keys())
 
-        # 更新统计和高亮
-        item.setText(1, f"{matched_count}/{total_count}")
-        is_all_matched = total_count > 0 and matched_count == total_count
-        apply_highlight(item, is_all_matched)
+            # 扫描该文件夹的所有视频（包含子文件夹），用于统计和高亮
+            all_video_files = self._get_folder_videos(folder)
+            matched_count = sum(1 for f in all_video_files if f in matched_files)
+            total_count = len(all_video_files)
 
-        # 清除现有子文件夹
-        item.takeChildren()
+            # 更新统计和高亮
+            item.setText(1, f"{matched_count}/{total_count}")
+            is_all_matched = total_count > 0 and matched_count == total_count
+            apply_highlight(item, is_all_matched)
 
-        # 递归添加子文件夹（支持多级）
-        self._add_subfolders_recursive(folder, item, matched_files)
+            # 递归添加子文件夹（支持多级）
+            self._add_subfolders_recursive(folder, item, matched_files)
 
         # 展开父文件夹
         item.setExpanded(True)
