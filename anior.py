@@ -2427,7 +2427,8 @@ class MainWindow(QMainWindow):
             if self.config.get('embyignore_extras', True) and extras_files:
                 embyignore_file = extras_folder / ".embyignore"
                 if not embyignore_file.exists():
-                    embyignore_file.touch()
+                    with open(embyignore_file, 'w', encoding='utf-8') as f:
+                        f.write('*')
 
             # 收集未整理的文件
             unorganized_files = []
