@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QMimeData, QThread, pyqtSignal, QSize, QTimer, QUrl, QSettings, QByteArray
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QColor, QBrush, QDesktopServices, QFont, QIcon
+from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 # 配置文件路径
 if getattr(sys, 'frozen', False):
@@ -524,7 +525,7 @@ class EpisodeRow(QFrame):
     dropped = pyqtSignal(int, int, list, list)  # season_num, episode_num, new_paths, old_paths
     cancel_match = pyqtSignal(int, int)  # season_num, episode_num
 
-    def __init__(self, season_num: int, episode_num: int, episode_name: str, air_date: str = '', runtime: int = None, parent_window=None):
+    def __init__(self, season_num: int, episode_num: int, episode_name: str, air_date: str = '', runtime: int = None, overview: str = '', still_path: str = None, parent_window=None):
         super().__init__()
         self.season_num = season_num
         self.episode_num = episode_num
@@ -545,42 +546,84 @@ class EpisodeRow(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
-        # 第一行：集号 + 剧集名 + 日期 + 时长 + 取消按钮
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
+        # 主布局：左右分栏
+        main_row = QHBoxLayout()
+        main_row.setSpacing(10)
+
+        # === 左侧：日期时长 + 剧照（宽度保持一致 185）===
+        left_layout = QVBoxLayout()
+        left_layout.setSpacing(4)
+        left_layout.setAlignment(Qt.AlignTop)
+
+        # 1. 日期 + 时长（左上角，宽度 185）
+        if air_date or (runtime and runtime > 0):
+            meta_container = QWidget()
+            meta_container.setMaximumWidth(185)
+            meta_layout = QHBoxLayout(meta_container)
+            meta_layout.setContentsMargins(0, 0, 0, 0)
+            meta_layout.setSpacing(6)
+
+            if air_date:
+                date_label = QLabel(f"📅 {air_date}")
+                date_label.setStyleSheet("color: #555; font-size: 11px; font-weight: bold;")
+                meta_layout.addWidget(date_label)
+
+            if runtime and runtime > 0:
+                runtime_label = QLabel(f"⏱ {runtime} 分钟")
+                runtime_label.setStyleSheet("color: #555; font-size: 11px; font-weight: bold;")
+                meta_layout.addWidget(runtime_label)
+
+            meta_layout.addStretch()
+            left_layout.addWidget(meta_container)
+
+        # 2. 剧照（185 宽度，无图时显示占位框）
+        self._still_path = still_path
+        self.poster_label = QLabel()
+        self.poster_label.setAlignment(Qt.AlignCenter)
+        self.poster_label.setStyleSheet("background-color: #f0f0f0; color: #999; font-size: 24px; font-weight: bold; border-radius: 4px;")
+        self.poster_label.setText(f"E{episode_num:02d}")
+        self.poster_label.setMaximumWidth(185)
+        self.poster_label.setMinimumHeight(104)
+        left_layout.addWidget(self.poster_label)
+        
+        # 异步加载剧照（有路径时）
+        if still_path:
+            QTimer.singleShot(100, lambda: self._load_still_image_async(still_path))
+
+        left_layout.addStretch()
+        main_row.addLayout(left_layout)
+
+        # === 右侧：集数 + 标题 → 简介 → 文件地址 ===
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(4)
+        right_layout.setAlignment(Qt.AlignTop)
+
+        # 1. 集数 + 标题 + 取消按钮（固定高度 27px）
+        title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(6)
 
         ep_label = QLabel(f"E{episode_num:02d}")
-        ep_label.setStyleSheet("font-weight: bold; color: #2196F3; min-width: 45px;")
-        top_row.addWidget(ep_label)
+        ep_label.setStyleSheet("font-weight: bold; color: #2196F3; font-size: 15px;")
+        title_layout.addWidget(ep_label)
 
         name_label = QLabel(episode_name)
-        name_label.setStyleSheet("font-weight: bold;")
+        name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         name_label.setWordWrap(True)
-        top_row.addWidget(name_label, 1)
+        title_layout.addWidget(name_label, 1)
 
-        # 时长
-        if runtime and runtime > 0:
-            runtime_label = QLabel(f"⏱ {runtime} 分钟")
-            runtime_label.setStyleSheet("color: #555; font-size: 13px; font-weight: bold;")
-            top_row.addWidget(runtime_label)
-
-        # 日期
-        if air_date:
-            date_label = QLabel(f"📅 {air_date}")
-            date_label.setStyleSheet("color: #555; font-size: 13px; font-weight: bold;")
-            top_row.addWidget(date_label)
-
-        # 取消匹配按钮（默认隐藏）
+        # 取消匹配按钮
         self.cancel_btn = QPushButton("✕ 取消")
-        self.cancel_btn.setFixedSize(60, 24)
+        self.cancel_btn.setFixedSize(65, 25)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
                 background-color: #9e9e9e;
                 color: white;
                 border-radius: 12px;
-                font-size: 11px;
+                font-size: 12px;
+                font-weight: bold;
             }
             QPushButton:hover {
                 background-color: #757575;
@@ -588,25 +631,60 @@ class EpisodeRow(QFrame):
         """)
         self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self.on_cancel_clicked)
-        top_row.addWidget(self.cancel_btn)
+        title_layout.addWidget(self.cancel_btn)
 
-        top_row.addStretch()
-        layout.addLayout(top_row)
+        title_widget = QWidget()
+        title_widget.setLayout(title_layout)
+        title_widget.setFixedHeight(27)
+        right_layout.addWidget(title_widget)
 
-        # 分割线
-        line = QFrame()
-        line.setFrameStyle(QFrame.HLine | QFrame.Sunken)
-        line.setStyleSheet("color: #eee;")
-        layout.addWidget(line)
+        # 2. 简介/文件地址（共用区域，固定高度让左右一致）
+        self._overview = overview  # 保存用于 reset
+        if overview:
+            self.info_label = QLabel(overview)
+            self.info_label.setStyleSheet("color: #333; font-size: 13px; padding: 6px; background-color: #f5f5f5; border-radius: 3px;")
+            self.info_label.setWordWrap(True)
+            self.info_label.setFixedHeight(97)  # 固定高度与左侧剧照对齐
+            self.info_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        else:
+            self.info_label = QLabel("拖动到下方框内")
+            self.info_label.setStyleSheet("color: #888; font-size: 11px; padding: 4px; background-color: #fafafa; border-radius: 3px; border: 1px dashed #ccc;")
+            self.info_label.setWordWrap(True)
+            self.info_label.setFixedHeight(97)  # 固定高度与左侧剧照对齐
+            self.info_label.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(self.info_label)
 
-        # 第三行：拖放状态
-        self.status_label = QLabel("← 拖放视频文件到此处")
-        self.status_label.setStyleSheet("color: #888; font-size: 12px; padding: 4px; background-color: #f9f9f9; border-radius: 3px;")
-        self.status_label.setWordWrap(True)
-        self.status_label.setMinimumHeight(30)
-        layout.addWidget(self.status_label)
+        main_row.addLayout(right_layout)
+        layout.addLayout(main_row)
 
         self.dropped_files = []
+
+    def _load_still_image_async(self, still_path: str, retry_count: int = 0):
+        """异步加载 TMDB 剧照"""
+        if not hasattr(self, 'poster_label') or not still_path:
+            return
+        self._network_manager = QNetworkAccessManager(self)
+        self._network_manager.finished.connect(lambda reply: self._on_image_loaded(reply, retry_count))
+        image_url = f"https://image.tmdb.org/t/p/w185{still_path}"
+        request = QNetworkRequest(QUrl(image_url))
+        request.setRawHeader(b"User-Agent", b"Mozilla/5.0")
+        self._reply = self._network_manager.get(request)
+
+    def _on_image_loaded(self, reply, retry_count: int = 0):
+        """图片加载完成回调"""
+        if not hasattr(self, 'poster_label'):
+            return
+        
+        if reply.error():
+            # 网络错误，重试一次
+            if retry_count == 0:
+                QTimer.singleShot(2000, lambda: self._load_still_image_async(self._still_path, 1))
+            return
+        
+        pixmap = QPixmap()
+        if pixmap.loadFromData(reply.readAll()):
+            self.poster_label.setPixmap(pixmap)
+            self.poster_label.setText("")
 
     def on_cancel_clicked(self):
         """取消匹配"""
@@ -616,14 +694,14 @@ class EpisodeRow(QFrame):
         """设置为已匹配状态"""
         self.dropped_files = list(files)
         if len(files) == 1:
-            self.status_label.setText(f"✓ 已匹配：{files[0].name}")
+            self.info_label.setText(f"✓ 已匹配：{files[0].name}")
         else:
-            self.status_label.setText(f"✓ 已匹配 {len(files)} 个文件:\n" + "\n".join(p.name for p in files))
+            self.info_label.setText(f"✓ 已匹配 {len(files)} 个文件:\n" + "\n".join(p.name for p in files))
 
-        self.status_label.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 13px; padding: 4px; background-color: #d4edda; border-radius: 3px;")
+        self.info_label.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 12px; padding: 4px; background-color: #d4edda; border-radius: 3px;")
         self.setStyleSheet("""
             QFrame {
-                border: 1px solid #4CAF50;
+                border: 2px solid #4CAF50;
                 border-radius: 3px;
                 background-color: #d4edda;
             }
@@ -633,8 +711,16 @@ class EpisodeRow(QFrame):
     def reset(self):
         """重置为未匹配状态"""
         self.dropped_files = []
-        self.status_label.setText("← 拖放视频文件到此处")
-        self.status_label.setStyleSheet("color: #888; font-size: 12px; padding: 4px; background-color: #f9f9f9; border-radius: 3px;")
+        # 恢复简介或拖放提示
+        if self._overview:
+            self.info_label.setText(self._overview)
+            self.info_label.setStyleSheet("color: #333; font-size: 13px; padding: 6px; background-color: #f5f5f5; border-radius: 3px;")
+            self.info_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        else:
+            self.info_label.setText("拖动到下方框内")
+            self.info_label.setStyleSheet("color: #888; font-size: 11px; padding: 4px; background-color: #fafafa; border-radius: 3px; border: 1px dashed #ccc;")
+            self.info_label.setAlignment(Qt.AlignCenter)
+        
         self.setStyleSheet("""
             QFrame {
                 border: 1px solid #ddd;
@@ -1033,7 +1119,12 @@ class SeasonTab(QWidget):
         """)
         self.mode_single_btn.clicked.connect(lambda: self.switch_mode("single"))
         mode_layout.addWidget(self.mode_single_btn)
-        
+
+        # 提示文字
+        hint_label = QLabel("👇 拖动到下方框内")
+        hint_label.setStyleSheet("color: #666; font-size: 12px; padding: 0px 8px;")
+        mode_layout.addWidget(hint_label)
+
         mode_layout.addStretch()
         
         self.clear_all_btn = QPushButton("🗑️ 清空所有")
@@ -1238,7 +1329,9 @@ class SeasonTab(QWidget):
             ep_name = ep.get('name', f'第{ep_num}集')
             air_date = ep.get('air_date', '')
             runtime = ep.get('runtime')  # 获取单集时长（分钟）
-            row = EpisodeRow(season_num, ep_num, ep_name, air_date, runtime, self.parent_window)
+            overview = ep.get('overview', '')  # 获取剧集简介
+            still_path = ep.get('still_path', '')  # 获取剧照路径
+            row = EpisodeRow(season_num, ep_num, ep_name, air_date, runtime, overview, still_path, self.parent_window)
             row.dropped.connect(self._on_episode_dropped)
             row.cancel_match.connect(self._on_cancel_match)
             self.episode_layout.addWidget(row)
