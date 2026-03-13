@@ -1072,6 +1072,8 @@ class SeasonTab(QWidget):
         self.file_mappings = {}  # 最终输出：{path: key}
         self._workers = []  # 保持线程引用
         self.match_mode = "batch"  # "batch" 或 "single"
+        self._episodes_loaded = False  # 是否已加载剧集详情
+        self._cached_episodes = None  # 缓存剧集数据，避免重复加载
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -1238,15 +1240,15 @@ class SeasonTab(QWidget):
             self.episode_widget.setVisible(True)
             self.mode_batch_btn.setChecked(False)
             self.mode_single_btn.setChecked(True)
+            # S0 默认单集模式，直接加载剧集
+            self._load_episodes()
         else:
             self.match_mode = "batch"
             self.batch_widget.setVisible(True)
             self.episode_widget.setVisible(False)
             self.mode_batch_btn.setChecked(True)
             self.mode_single_btn.setChecked(False)
-
-        # 加载剧集（预加载，但不显示）
-        self._load_episodes()
+            # 其他季度默认批量模式，不加载剧集详情，等待用户点击单集匹配时再加载
 
     def switch_mode(self, mode: str):
         """切换匹配模式"""
@@ -1279,12 +1281,16 @@ class SeasonTab(QWidget):
                         if isinstance(row, EpisodeRow):
                             row.setAcceptDrops(False)
             else:
-                # 切换到单集模式：清空批量匹配数据
+                # 切换到单集模式：首次点击时加载剧集详情
+                if not self._episodes_loaded:
+                    self._load_episodes()
+                
+                # 清空批量匹配数据
                 # 从 file_mappings 移除批量匹配的文件
                 for path in list(self.batch_paths):
                     if path in self.file_mappings:
                         del self.file_mappings[path]
-                
+
                 self.batch_paths = []
                 while self.match_list_layout.count():
                     item = self.match_list_layout.takeAt(0)
@@ -1292,11 +1298,16 @@ class SeasonTab(QWidget):
                         item.widget().deleteLater()
                 self.match_list_widget.setVisible(False)
                 self.batch_status.setText("")
-                
+
                 self.batch_widget.setVisible(False)
                 self.episode_widget.setVisible(True)
                 self.mode_batch_btn.setChecked(False)
                 self.mode_single_btn.setChecked(True)
+                
+                # 如果已加载过剧集，显示剧集列表
+                if self._episodes_loaded and self._cached_episodes:
+                    self._show_episode_list()
+                
                 # 单集模式：禁用批量拖放，启用单集行拖放
                 self.batch_drop_add.setEnabled(False)
                 self.batch_drop_sort.setEnabled(False)
@@ -1323,15 +1334,37 @@ class SeasonTab(QWidget):
         worker.start()
 
     def _on_episodes_loaded(self, season_num: int, details: dict):
-        episodes = details.get('episodes', [])
-        for ep in episodes:
+        """剧集详情加载完成回调"""
+        # 缓存剧集数据
+        self._cached_episodes = details.get('episodes', [])
+        self._episodes_loaded = True
+        
+        # 如果当前是批量模式，不显示剧集列表（等待用户点击单集匹配时再显示）
+        if self.match_mode == "batch":
+            return
+        
+        # 单集模式：直接显示剧集列表
+        self._show_episode_list()
+    
+    def _show_episode_list(self):
+        """显示剧集列表（使用缓存数据）"""
+        if not self._cached_episodes:
+            return
+        
+        # 清空现有的剧集行（防止重复）
+        while self.episode_layout.count():
+            item = self.episode_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        
+        for ep in self._cached_episodes:
             ep_num = ep.get('episode_number', 0)
             ep_name = ep.get('name', f'第{ep_num}集')
             air_date = ep.get('air_date', '')
             runtime = ep.get('runtime')  # 获取单集时长（分钟）
             overview = ep.get('overview', '')  # 获取剧集简介
             still_path = ep.get('still_path', '')  # 获取剧照路径
-            row = EpisodeRow(season_num, ep_num, ep_name, air_date, runtime, overview, still_path, self.parent_window)
+            row = EpisodeRow(self.season_num, ep_num, ep_name, air_date, runtime, overview, still_path, self.parent_window)
             row.dropped.connect(self._on_episode_dropped)
             row.cancel_match.connect(self._on_cancel_match)
             self.episode_layout.addWidget(row)
