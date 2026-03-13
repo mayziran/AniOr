@@ -619,14 +619,14 @@ class EpisodeRow(QFrame):
         self.cancel_btn.setFixedSize(65, 25)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
-                background-color: #9e9e9e;
+                background-color: #f44336;
                 color: white;
                 border-radius: 12px;
                 font-size: 12px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #757575;
+                background-color: #d32f2f;
             }
         """)
         self.cancel_btn.setVisible(False)
