@@ -534,7 +534,7 @@ class EpisodeRow(QFrame):
     dropped = pyqtSignal(int, int, list, list)  # season_num, episode_num, new_paths, old_paths
     cancel_match = pyqtSignal(int, int)  # season_num, episode_num
 
-    def __init__(self, season_num: int, episode_num: int, episode_name: str, air_date: str = '', parent_window=None):
+    def __init__(self, season_num: int, episode_num: int, episode_name: str, air_date: str = '', runtime: int = None, parent_window=None):
         super().__init__()
         self.season_num = season_num
         self.episode_num = episode_num
@@ -557,7 +557,7 @@ class EpisodeRow(QFrame):
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
 
-        # 第一行：集号 + 剧集名 + 日期 + 取消按钮
+        # 第一行：集号 + 剧集名 + 日期 + 时长 + 取消按钮
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
@@ -570,10 +570,16 @@ class EpisodeRow(QFrame):
         name_label.setWordWrap(True)
         top_row.addWidget(name_label, 1)
 
-        # 日期放在最后
+        # 时长
+        if runtime and runtime > 0:
+            runtime_label = QLabel(f"⏱ {runtime} 分钟")
+            runtime_label.setStyleSheet("color: #555; font-size: 13px; font-weight: bold;")
+            top_row.addWidget(runtime_label)
+
+        # 日期
         if air_date:
             date_label = QLabel(f"📅 {air_date}")
-            date_label.setStyleSheet("color: #888; font-size: 10px;")
+            date_label.setStyleSheet("color: #555; font-size: 13px; font-weight: bold;")
             top_row.addWidget(date_label)
 
         # 取消匹配按钮（默认隐藏）
@@ -1234,7 +1240,8 @@ class SeasonTab(QWidget):
             ep_num = ep.get('episode_number', 0)
             ep_name = ep.get('name', f'第{ep_num}集')
             air_date = ep.get('air_date', '')
-            row = EpisodeRow(season_num, ep_num, ep_name, air_date, self.parent_window)
+            runtime = ep.get('runtime')  # 获取单集时长（分钟）
+            row = EpisodeRow(season_num, ep_num, ep_name, air_date, runtime, self.parent_window)
             row.dropped.connect(self._on_episode_dropped)
             row.cancel_match.connect(self._on_cancel_match)
             self.episode_layout.addWidget(row)
