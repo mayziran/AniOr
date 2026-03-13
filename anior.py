@@ -1865,6 +1865,7 @@ class MainWindow(QMainWindow):
             return
 
         from PyQt5.QtWidgets import QMenu
+        from PyQt5.QtGui import QClipboard
         menu = QMenu(self)
 
         # 播放选项
@@ -1876,6 +1877,12 @@ class MainWindow(QMainWindow):
         # 打开文件夹选项
         open_folder_action = menu.addAction("📂 打开文件所在文件夹")
         open_folder_action.triggered.connect(lambda: self._open_file_location(path))
+
+        menu.addSeparator()
+
+        # 复制文件名选项
+        copy_name_action = menu.addAction("📋 复制文件名")
+        copy_name_action.triggered.connect(lambda: QApplication.clipboard().setText(path.name))
 
         menu.exec_(self.video_list.mapToGlobal(pos))
 
