@@ -1189,6 +1189,11 @@ class SeasonTab(QWidget):
                             row.setAcceptDrops(False)
             else:
                 # 切换到单集模式：清空批量匹配数据
+                # 从 file_mappings 移除批量匹配的文件
+                for path in list(self.batch_paths):
+                    if path in self.file_mappings:
+                        del self.file_mappings[path]
+                
                 self.batch_paths = []
                 while self.match_list_layout.count():
                     item = self.match_list_layout.takeAt(0)
