@@ -1575,6 +1575,8 @@ class MainWindow(QMainWindow):
         # 默认按文件名升序排序
         self.video_list.header().setSortIndicator(0, Qt.AscendingOrder)
         self.video_list.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self.video_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.video_list.customContextMenuRequested.connect(self._on_video_context_menu)
         self.video_list.setStyleSheet("""
             QTreeWidget {
                 border: 1px solid #ccc;
@@ -1851,6 +1853,52 @@ class MainWindow(QMainWindow):
         selected_count = len(self.video_list.selectedItems())
         if selected_count > 0:
             self.statusBar.showMessage(f"已选中 {selected_count} 个文件")
+
+    def _on_video_context_menu(self, pos):
+        """视频列表右键菜单"""
+        item = self.video_list.itemAt(pos)
+        if not item:
+            return
+
+        path = item.data(0, Qt.UserRole)
+        if not path:
+            return
+
+        from PyQt5.QtWidgets import QMenu
+        menu = QMenu(self)
+
+        # 播放选项
+        play_action = menu.addAction("▶️ 播放")
+        play_action.triggered.connect(lambda: self._play_video(path))
+
+        menu.addSeparator()
+
+        # 打开文件夹选项
+        open_folder_action = menu.addAction("📂 打开文件所在文件夹")
+        open_folder_action.triggered.connect(lambda: self._open_file_location(path))
+
+        menu.exec_(self.video_list.mapToGlobal(pos))
+
+    def _play_video(self, path: Path):
+        """使用默认播放器打开视频"""
+        try:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception as e:
+            QMessageBox.warning(self, "播放失败", f"无法打开视频文件：{e}")
+
+    def _open_file_location(self, path: Path):
+        """打开文件所在文件夹并选中文件"""
+        try:
+            # Windows 使用 explorer /select 命令
+            if sys.platform == "win32":
+                import subprocess
+                # explorer 是异步启动的，不检查返回码
+                subprocess.Popen(['explorer', '/select,', str(path)])
+            else:
+                # 其他系统只打开文件夹
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", f"无法打开文件夹：{e}")
 
     def search_and_select(self):
         """搜索并选择番剧"""
