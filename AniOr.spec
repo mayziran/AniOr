@@ -8,10 +8,11 @@ block_cipher = None
 
 a = Analysis(
     ['anior.py'],
-    pathex=[],
+    pathex=['resources'],  # 添加 resources 目录到搜索路径
     binaries=[],
     datas=[],
     hiddenimports=[
+        'resources.icon_rc',  # Qt 资源模块
         # PyQt5 模块
         'PyQt5',
         'PyQt5.QtCore',
@@ -66,5 +67,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='docs/icon.ico',  # 应用程序图标
+    icon='resources/icon.ico',  # 应用程序图标
 )

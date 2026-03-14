@@ -2065,6 +2065,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("AniOr - 动漫视频整理工具")
         self.setMinimumSize(1200, 800)
         self.resize(1400, 1000)  # 默认窗口大小
+        
+        # 设置窗口图标（Qt 资源路径）
+        self.setWindowIcon(QIcon(':/icon.ico'))
 
         # 保持线程引用
         self._workers = []
@@ -3327,6 +3330,13 @@ class ConfigDialog(QDialog):
 
 # ==================== 主函数 ====================
 def main():
+    # Windows 任务栏图标支持
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AniOr")
+    
+    # 导入 Qt 资源模块（图标嵌入 exe）
+    from resources import icon_rc
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet("""
@@ -3335,10 +3345,8 @@ def main():
         QStatusBar { background-color: #f5f5f5; }
     """)
 
-    # 设置应用程序图标
-    icon_path = Path(__file__).parent / "docs" / "icon.ico"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    # 设置应用程序图标（Qt 资源路径）
+    app.setWindowIcon(QIcon(':/icon.ico'))
 
     try:
         window = MainWindow()

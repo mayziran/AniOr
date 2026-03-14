@@ -51,3 +51,8 @@ AniOr.exe
 # 临时文件
 *.tmp
 *.bak
+
+# Python 缓存（但保留 resources 目录的 icon_rc.py）
+__pycache__/
+resources/__pycache__/
+!resources/icon_rc.py
