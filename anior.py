@@ -53,6 +53,7 @@ class Config:
         'video_extensions': DEFAULT_VIDEO_EXTENSIONS.copy(),  # 支持的视频格式列表
         'auto_extras': True,        # 自动将未匹配视频整理到 extras 文件夹
         'embyignore_extras': True,  # 在 extras 文件夹生成.embyignore 文件
+        'scan_unorganized': True,   # 整理完成后扫描未整理文件
     }
 
     def __init__(self):
@@ -1642,6 +1643,13 @@ class MainWindow(QMainWindow):
         self.auto_extras_check.setStyleSheet("QCheckBox { color: #333; font-weight: bold; }")
         tl.addWidget(self.auto_extras_check)
 
+        # 扫描未整理文件开关
+        self.scan_check = QCheckBox("🔍 整理后扫描未整理文件")
+        self.scan_check.setChecked(self.config.get('scan_unorganized', True))
+        self.scan_check.stateChanged.connect(self.on_scan_check_changed)
+        self.scan_check.setStyleSheet("QCheckBox { color: #333; font-weight: bold; }")
+        tl.addWidget(self.scan_check)
+
         config_btn = QPushButton("⚙️ 设置")
         config_btn.clicked.connect(self.open_config)
         tl.addWidget(config_btn)
@@ -2437,19 +2445,20 @@ class MainWindow(QMainWindow):
                     with open(embyignore_file, 'w', encoding='utf-8') as f:
                         f.write('*')
 
-            # 收集未整理的文件
+            # 收集未整理的文件（根据开关配置）
             unorganized_files = []
-            
+
             # 从 fail_details 中提取因重名未整理的文件（完整路径）
             duplicate_files = set()
             for src, dst, error in fail_details:
                 if "目标文件已存在" in error:
                     duplicate_files.add(src)  # 添加源文件完整路径
-            
+
             # 扫描源目录中的所有文件，排除已处理的
             source_dir = Path(self.config.get('source_dir', ''))
-            
-            if source_dir.exists():
+
+            # 只有开启开关时才扫描未整理文件
+            if self.config.get('scan_unorganized', True) and source_dir.exists():
                 # 找到每个已匹配文件所属的动漫文件夹
                 anime_folders = set()
                 for f in self.file_mappings.keys():
@@ -2523,6 +2532,10 @@ class MainWindow(QMainWindow):
     def on_auto_extras_changed(self, state):
         """auto_extras 开关状态变化"""
         self.config.set('auto_extras', state == Qt.Checked, save_later=True)
+    
+    def on_scan_check_changed(self, state):
+        """scan_unorganized 开关状态变化"""
+        self.config.set('scan_unorganized', state == Qt.Checked, save_later=True)
 
     def closeEvent(self, event):
         # 使用 Qt 标准方式保存窗口状态
