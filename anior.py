@@ -47,7 +47,8 @@ class Config:
 
     DEFAULT = {
         'source_dir': '',           # 源目录
-        'target_dir': '',           # 目标目录
+        'target_dir': '',           # 目标目录（TV 动画）
+        'movie_target_dir': '',     # 剧场版目标目录
         'tmdb_api_key': '',         # TMDB API Key
         'move_mode': 'link',        # 整理模式：link=硬链接，cut=剪切，copy=复制
         'video_extensions': DEFAULT_VIDEO_EXTENSIONS.copy(),  # 支持的视频格式列表
@@ -132,8 +133,28 @@ class TMDBClient:
         except:
             return []
 
+    def search_movie(self, query: str) -> List[dict]:
+        """搜索电影（剧场版动画）"""
+        url = f'{self.base_url}/search/movie'
+        params = {'api_key': self.api_key, 'query': query, 'language': 'zh-CN', 'page': 1}
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            return resp.json().get('results', [])
+        except:
+            return []
+
     def get_tv_details(self, tv_id: int) -> Optional[dict]:
         url = f'{self.base_url}/tv/{tv_id}'
+        params = {'api_key': self.api_key, 'language': 'zh-CN'}
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            return resp.json()
+        except:
+            return None
+
+    def get_movie_details(self, movie_id: int) -> Optional[dict]:
+        """获取电影详情"""
+        url = f'{self.base_url}/movie/{movie_id}'
         params = {'api_key': self.api_key, 'language': 'zh-CN'}
         try:
             resp = requests.get(url, params=params, timeout=15)
@@ -312,11 +333,17 @@ class SeasonWorker(QThread):
 
 # ==================== 搜索选择对话框 ====================
 class SearchSelectDialog(QDialog):
-    """搜索并选择番剧的对话框"""
-    def __init__(self, tmdb: TMDBClient, query: str, parent=None):
+    """搜索并选择番剧/剧场版的对话框"""
+    def __init__(self, tmdb: TMDBClient, query: str, search_type: str = "tv", parent=None):
+        """
+        Args:
+            search_type: "tv" 或 "movie"
+        """
         super().__init__(parent)
         self.tmdb = tmdb
         self.selected_tv = None
+        self.selected_movie = None
+        self.selected_type = search_type  # 记录搜索类型
         self.setWindowTitle(f"搜索结果：{query}")
         self.setMinimumSize(800, 500)
         self.resize(800, 500)
@@ -324,23 +351,27 @@ class SearchSelectDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(6)
 
+        # 类型提示
+        type_label = QLabel(f"搜索类型：{'📺 TV 动画' if search_type == 'tv' else '🎬 剧场版'}")
+        type_label.setStyleSheet("font-weight: bold; font-size: 13px; padding: 5px; background-color: #e3f2fd; border-radius: 4px;")
+        layout.addWidget(type_label)
+
         # 结果列表
         self.result_list = QTreeWidget()
         self.result_list.setHeaderLabels(["名称", "年份", "评分"])
-        self.result_list.header().setSectionResizeMode(0, QHeaderView.Interactive)  # 名称列可调整
-        self.result_list.header().setSectionResizeMode(1, QHeaderView.Interactive)  # 年份列可调整
-        self.result_list.header().setSectionResizeMode(2, QHeaderView.Interactive)  # 评分列可调整
-        self.result_list.setColumnWidth(0, 600)  # 名称列初始宽度（适配 800 宽弹窗）
-        self.result_list.setColumnWidth(1, 100)  # 年份列初始宽度
-        self.result_list.setColumnWidth(2, 60)   # 评分列初始宽度
-        self.result_list.header().setSectionsMovable(True)  # 允许移动列
-        self.result_list.header().setSectionsClickable(True)  # 允许点击排序
-        self.result_list.setSortingEnabled(True)  # 启用排序
+        self.result_list.header().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.result_list.header().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.result_list.header().setSectionResizeMode(2, QHeaderView.Interactive)
+        self.result_list.setColumnWidth(0, 600)
+        self.result_list.setColumnWidth(1, 100)
+        self.result_list.setColumnWidth(2, 60)
+        self.result_list.header().setSectionsMovable(True)
+        self.result_list.header().setSectionsClickable(True)
+        self.result_list.setSortingEnabled(True)
         self.result_list.setSelectionMode(QTreeWidget.SingleSelection)
         self.result_list.itemDoubleClicked.connect(self.select_item)
         layout.addWidget(self.result_list)
 
-        # 禁用自动排序，保持 API 返回的原始顺序（相关性排序）
         self.result_list.header().setSortIndicator(-1, Qt.AscendingOrder)
 
         # 按钮
@@ -354,14 +385,24 @@ class SearchSelectDialog(QDialog):
 
     def search(self, query: str):
         self.result_list.clear()
-        results = self.tmdb.search_tv(query)
-        for tv in results:
-            item = QTreeWidgetItem()
-            item.setText(0, tv.get('name', '未知'))
-            item.setText(1, tv.get('first_air_date', '')[:4] if tv.get('first_air_date') else '')
-            item.setText(2, f"{tv.get('vote_average', 0):.1f}")
-            item.setData(0, Qt.UserRole, tv)
-            self.result_list.addTopLevelItem(item)
+        if self.selected_type == "tv":
+            results = self.tmdb.search_tv(query)
+            for tv in results:
+                item = QTreeWidgetItem()
+                item.setText(0, tv.get('name', '未知'))
+                item.setText(1, tv.get('first_air_date', '')[:4] if tv.get('first_air_date') else '')
+                item.setText(2, f"{tv.get('vote_average', 0):.1f}")
+                item.setData(0, Qt.UserRole, tv)
+                self.result_list.addTopLevelItem(item)
+        else:  # movie
+            results = self.tmdb.search_movie(query)
+            for movie in results:
+                item = QTreeWidgetItem()
+                item.setText(0, movie.get('title', '未知'))
+                item.setText(1, movie.get('release_date', '')[:4] if movie.get('release_date') else '')
+                item.setText(2, f"{movie.get('vote_average', 0):.1f}")
+                item.setData(0, Qt.UserRole, movie)
+                self.result_list.addTopLevelItem(item)
 
     def select_item(self):
         item = self.result_list.currentItem()
@@ -492,11 +533,11 @@ class BatchDropArea(QFrame):
                 QFrame {
                     border: 2px dashed #4CAF50;
                     border-radius: 5px;
-                    background-color: #f1f8e9;
+                    background-color: rgba(241, 248, 233, 0.5);
                 }
                 QFrame:hover {
                     border-color: #2E7D32;
-                    background-color: #dcedc8;
+                    background-color: rgba(220, 237, 200, 0.6);
                 }
             """)
         else:  # sort
@@ -504,11 +545,11 @@ class BatchDropArea(QFrame):
                 QFrame {
                     border: 2px dashed #2196F3;
                     border-radius: 5px;
-                    background-color: #e3f2fd;
+                    background-color: rgba(227, 242, 253, 0.5);
                 }
                 QFrame:hover {
                     border-color: #1565C0;
-                    background-color: #bbdefb;
+                    background-color: rgba(187, 222, 251, 0.6);
                 }
             """)
 
@@ -1059,6 +1100,433 @@ class ExtrasTab(QWidget):
             import traceback
             print(f"extras drop error: {e}")
             print(traceback.format_exc())
+
+
+# ==================== 剧场版页面 ====================
+class MovieTab(QWidget):
+    """剧场版标签页 - 用于放置剧场版动画文件"""
+    def __init__(self, tmdb: TMDBClient, movie_info: dict, parent_window=None):
+        super().__init__()
+        self.tmdb = tmdb
+        self.movie_info = movie_info
+        self.parent_window = parent_window
+        self.batch_paths = []  # 批量匹配的文件路径列表（按顺序，用于多 CD）
+        self.file_mappings = {}  # 最终输出：{path: "movie"}
+        self._network_manager = None  # 用于加载海报
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # ========== 顶部：提示和清空按钮 ==========
+        top_layout = QHBoxLayout()
+
+        # 提示文字
+        hint_label = QLabel("👇 拖动视频文件到下方区域，多文件自动添加 -cd1, -cd2 后缀")
+        hint_label.setStyleSheet("color: #666; font-size: 13px; font-weight: bold; padding: 5px;")
+        top_layout.addWidget(hint_label)
+
+        top_layout.addStretch()
+
+        self.clear_all_btn = QPushButton("🗑️ 清空所有")
+        self.clear_all_btn.setFixedHeight(30)
+        self.clear_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 4px 12px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
+        self.clear_all_btn.setVisible(False)
+        self.clear_all_btn.clicked.connect(self.clear_all_matches)
+        top_layout.addWidget(self.clear_all_btn)
+
+        layout.addLayout(top_layout)
+
+        # ========== 影片信息区（上半部分） ==========
+        self.info_widget = QWidget()
+        info_layout = QHBoxLayout(self.info_widget)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(12)
+
+        # 海报（左侧，200px 宽）
+        self.poster_label = QLabel()
+        self.poster_label.setAlignment(Qt.AlignCenter)
+        self.poster_label.setStyleSheet("background-color: #f0f0f0; color: #999; font-size: 24px; font-weight: bold; border-radius: 4px;")
+        self.poster_label.setText("海报")
+        self.poster_label.setFixedSize(200, 300)
+        info_layout.addWidget(self.poster_label)
+
+        # 影片信息（右侧）
+        right_layout = QVBoxLayout()
+        right_layout.setAlignment(Qt.AlignTop)
+
+        # 标题
+        movie_name = movie_info.get('title', '未知')
+        title_label = QLabel(f"🎬 {movie_name}")
+        title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #333;")
+        right_layout.addWidget(title_label)
+
+        # 简介
+        overview = movie_info.get('overview', '暂无简介')
+        self.overview_label = QLabel(overview if overview else '暂无简介')
+        self.overview_label.setStyleSheet("color: #666; font-size: 13px; padding: 8px; background-color: #f5f5f5; border-radius: 4px;")
+        self.overview_label.setWordWrap(True)
+        self.overview_label.setMaximumHeight(150)
+        right_layout.addWidget(self.overview_label)
+
+        # 元信息
+        meta_layout = QHBoxLayout()
+        release_date = movie_info.get('release_date', '')
+        if release_date:
+            date_label = QLabel(f"📅 {release_date}")
+            date_label.setStyleSheet("color: #555; font-size: 12px; font-weight: bold;")
+            meta_layout.addWidget(date_label)
+
+        runtime = movie_info.get('runtime', 0)
+        if runtime:
+            runtime_label = QLabel(f"⏱ {runtime} 分钟")
+            runtime_label.setStyleSheet("color: #555; font-size: 12px; font-weight: bold;")
+            meta_layout.addWidget(runtime_label)
+
+        vote = movie_info.get('vote_average', 0)
+        if vote:
+            vote_label = QLabel(f"⭐ {vote:.1f} 分")
+            vote_label.setStyleSheet("color: #555; font-size: 12px; font-weight: bold;")
+            meta_layout.addWidget(vote_label)
+
+        meta_layout.addStretch()
+        right_layout.addLayout(meta_layout)
+
+        # 状态标签
+        self.status_label = QLabel("💡 将视频文件拖放到下方匹配区域")
+        self.status_label.setStyleSheet("color: #2196F3; font-size: 13px; font-weight: bold; padding: 8px; background-color: #e3f2fd; border-radius: 4px;")
+        self.status_label.setWordWrap(True)
+        right_layout.addWidget(self.status_label)
+
+        right_layout.addStretch()
+        info_layout.addLayout(right_layout)
+
+        layout.addWidget(self.info_widget)
+
+        # ========== 匹配区（下半部分） ==========
+        self.match_widget = QWidget()
+        match_layout = QVBoxLayout(self.match_widget)
+        match_layout.setContentsMargins(0, 0, 0, 0)
+        match_layout.setSpacing(4)
+
+        # 左右分栏：左边新增，右边覆盖
+        drop_area_layout = QHBoxLayout()
+        drop_area_layout.setSpacing(8)
+
+        # 左侧：新增文件
+        add_group = QGroupBox("➕ 新增")
+        add_layout = QVBoxLayout(add_group)
+
+        self.drop_area_add = BatchDropArea(self, drop_type="add")
+        self.drop_area_add.setMinimumHeight(80)
+        add_layout.addWidget(self.drop_area_add)
+
+        add_hint = QLabel("拖放到此处\n按文件名排序追加到列表")
+        add_hint.setStyleSheet("color: #888; font-size: 11px;")
+        add_hint.setAlignment(Qt.AlignCenter)
+        add_layout.addWidget(add_hint)
+
+        drop_area_layout.addWidget(add_group, 1)
+
+        # 右侧：覆盖/排序
+        sort_group = QGroupBox("📋 覆盖/排序")
+        sort_layout = QVBoxLayout(sort_group)
+
+        self.drop_area_sort = BatchDropArea(self, drop_type="sort")
+        self.drop_area_sort.setMinimumHeight(80)
+        sort_layout.addWidget(self.drop_area_sort)
+
+        sort_hint = QLabel("拖放到此处\n按文件名排序覆盖列表")
+        sort_hint.setStyleSheet("color: #888; font-size: 11px;")
+        sort_hint.setAlignment(Qt.AlignCenter)
+        sort_layout.addWidget(sort_hint)
+
+        drop_area_layout.addWidget(sort_group, 1)
+        match_layout.addLayout(drop_area_layout)
+
+        # 匹配列表（带滚动 - 占据剩余空间）
+        match_scroll = QScrollArea()
+        match_scroll.setWidgetResizable(True)
+        match_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        match_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.match_list_widget = QWidget()
+        self.match_list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.match_list_layout = QVBoxLayout(self.match_list_widget)
+        self.match_list_layout.setContentsMargins(4, 4, 4, 4)
+        self.match_list_layout.setSpacing(2)
+        self.match_list_widget.setVisible(False)
+        match_scroll.setWidget(self.match_list_widget)
+        match_layout.addWidget(match_scroll, 1)
+
+        layout.addWidget(self.match_widget, 1)
+
+        # 加载海报
+        self._load_poster()
+        self._update_buttons()
+
+    def _load_poster(self):
+        """异步加载海报"""
+        poster_path = self.movie_info.get('poster_path')
+        if not poster_path:
+            self.poster_label.setText("无海报")
+            return
+
+        self._network_manager = QNetworkAccessManager(self)
+        self._network_manager.finished.connect(self._on_poster_loaded)
+        image_url = f"https://image.tmdb.org/t/p/w300{poster_path}"
+        request = QNetworkRequest(QUrl(image_url))
+        request.setRawHeader(b"User-Agent", b"Mozilla/5.0")
+        self._reply = self._network_manager.get(request)
+
+    def _on_poster_loaded(self, reply):
+        """海报加载完成回调"""
+        if reply.error():
+            self.poster_label.setText("加载失败")
+            return
+
+        pixmap = QPixmap()
+        if pixmap.loadFromData(reply.readAll()):
+            # 缩放并圆角处理
+            scaled = pixmap.scaled(200, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.poster_label.setPixmap(scaled)
+            self.poster_label.setText("")
+
+    def handle_batch_drop(self, event, drop_type: str = "add"):
+        """处理批量拖放"""
+        data = event.mimeData().data('application/x-video-files').data()
+        paths = [Path(p.decode('utf-8')) for p in data.split(b'\n') if p]
+
+        # 检测是否有文件已匹配（标绿）
+        if self.parent_window:
+            matched_files = self.parent_window.get_matched_files()
+            if Config.check_duplicate_files(paths, matched_files, self):
+                return
+
+        sorted_paths = sorted(paths, key=lambda p: p.name)
+
+        if drop_type == "add":
+            # 新增模式：追加到列表末尾
+            existing_paths = list(self.batch_paths)
+            for path in sorted_paths:
+                if path not in existing_paths:
+                    existing_paths.append(path)
+            self.batch_paths = sorted(existing_paths, key=lambda p: p.name)
+        else:  # sort
+            # 覆盖模式：替换当前列表
+            for old_path in self.batch_paths:
+                if old_path in self.file_mappings:
+                    del self.file_mappings[old_path]
+            self.batch_paths = sorted_paths
+
+        # 更新 file_mappings - 自动识别单文件/多 CD
+        for idx, path in enumerate(self.batch_paths):
+            if len(self.batch_paths) == 1:
+                key = "movie"  # 单文件不加后缀
+            else:
+                key = f"movie-cd{idx + 1}"  # 多 CD 加后缀
+            self.file_mappings[path] = key
+
+        # 更新 UI
+        self._refresh_match_list()
+        self._update_buttons()
+
+        if self.parent_window:
+            self.parent_window._update_status(sorted_paths)
+
+    def _update_buttons(self):
+        """更新按钮显示状态"""
+        has_any = bool(self.file_mappings)
+        self.clear_all_btn.setVisible(has_any)
+
+        # 更新状态标签
+        if not self.file_mappings:
+            self.status_label.setText("💡 将视频文件拖放到下方匹配区域")
+        elif len(self.file_mappings) == 1:
+            self.status_label.setText("✅ 已匹配 1 个文件 - 整理时将直接使用影片名称")
+        else:
+            self.status_label.setText(f"✅ 已匹配 {len(self.file_mappings)} 个文件 - 整理时将自动添加 -cd1, -cd2 后缀")
+
+    def clear_all_matches(self):
+        """清空所有匹配"""
+        self.file_mappings.clear()
+        self.batch_paths = []
+        while self.match_list_layout.count():
+            item = self.match_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.match_list_widget.setVisible(False)
+
+        self._update_buttons()
+        if self.parent_window:
+            self.parent_window._update_status()
+
+    def _refresh_match_list(self):
+        """刷新匹配列表显示"""
+        while self.match_list_layout.count():
+            item = self.match_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self.batch_paths:
+            self.match_list_widget.setVisible(False)
+            self._update_buttons()
+            return
+
+        for idx, path in enumerate(self.batch_paths):
+            # 剧场版使用 CD 编号，不显示 E01 格式
+            cd_label = f"CD{idx + 1}" if len(self.batch_paths) > 1 else "正片"
+            item = MovieMatchItem(cd_label, path, idx, self)
+            self.match_list_layout.addWidget(item)
+
+        self.match_list_widget.setVisible(True)
+        self._update_buttons()
+
+    def remove_match_item(self, item):
+        """删除匹配项"""
+        idx = item.index
+        if 0 <= idx < len(self.batch_paths):
+            path = self.batch_paths[idx]
+            if path in self.file_mappings:
+                del self.file_mappings[path]
+            self.batch_paths.pop(idx)
+            self._refresh_match_list()
+            self._update_buttons()
+            if self.parent_window:
+                self.parent_window._update_status()
+
+    def reorder_match_item(self, from_index: int, to_index: int):
+        """重新排序匹配项"""
+        if 0 <= from_index < len(self.batch_paths) and 0 <= to_index < len(self.batch_paths):
+            moved_path = self.batch_paths.pop(from_index)
+            self.batch_paths.insert(to_index, moved_path)
+
+            # 重新分配 CD 编号
+            for idx, path in enumerate(self.batch_paths):
+                if len(self.batch_paths) == 1:
+                    key = "movie"
+                else:
+                    key = f"movie-cd{idx + 1}"
+                self.file_mappings[path] = key
+
+            self._refresh_match_list()
+            self._update_buttons()
+            if self.parent_window:
+                self.parent_window._update_status()
+
+
+# ==================== 剧场版匹配项 ====================
+class MovieMatchItem(QFrame):
+    """剧场版匹配列表中的单项"""
+    def __init__(self, cd_label: str, path: Path, index: int, parent_tab=None):
+        super().__init__()
+        self.cd_label = cd_label  # CD1, CD2 或 正片
+        self.path = path
+        self.index = index
+        self.parent_tab = parent_tab
+        self.setAcceptDrops(True)
+        self.setFrameStyle(QFrame.Box | QFrame.Plain)
+        self.setStyleSheet("""
+            QFrame {
+                border: 1px solid #ddd;
+                border-radius: 3px;
+                background-color: #f9f9f9;
+            }
+            QFrame:hover {
+                border-color: #2196F3;
+                background-color: #e3f2fd;
+            }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        # 拖放手柄
+        handle = QLabel("☰")
+        handle.setStyleSheet("color: #999; font-size: 14px; min-width: 20px;")
+        handle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(handle)
+
+        # CD 标签（动态更新）
+        self.cd_label_widget = QLabel(cd_label)
+        self.cd_label_widget.setStyleSheet("font-weight: bold; color: #E91E63; min-width: 60px;")
+        layout.addWidget(self.cd_label_widget)
+
+        # 文件名
+        name_label = QLabel(path.name)
+        name_label.setStyleSheet("color: #333;")
+        name_label.setWordWrap(True)
+        layout.addWidget(name_label, 1)
+
+        # 删除按钮
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(24, 24)
+        del_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border-radius: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
+        del_btn.clicked.connect(self.remove_self)
+        layout.addWidget(del_btn)
+
+    def update_cd_label(self, new_cd_label: str):
+        """更新 CD 标签显示"""
+        self.cd_label = new_cd_label
+        self.cd_label_widget.setText(new_cd_label)
+
+    def remove_self(self):
+        if self.parent_tab:
+            self.parent_tab.remove_match_item(self)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_start_pos = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton:
+            if (event.pos() - self.drag_start_pos).manhattanLength() > QApplication.startDragDistance():
+                drag = QDrag(self)
+                mime_data = QMimeData()
+                mime_data.setData('application/x-match-item', str(self.index).encode('utf-8'))
+                drag.setMimeData(mime_data)
+
+                # 创建拖放预览
+                pixmap = QPixmap(self.size())
+                self.render(pixmap)
+                drag.setPixmap(pixmap)
+                drag.setHotSpot(event.pos())
+
+                if drag.exec_(Qt.MoveAction) == Qt.MoveAction:
+                    pass
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasFormat('application/x-match-item'):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        if event.mimeData().hasFormat('application/x-match-item'):
+            data = event.mimeData().data('application/x-match-item').data()
+            source_index = int(data.decode('utf-8'))
+            if source_index != self.index and self.parent_tab:
+                self.parent_tab.reorder_match_item(source_index, self.index)
 
 
 # ==================== 季度页面 ====================
@@ -1746,15 +2214,51 @@ class MainWindow(QMainWindow):
         left_splitter.setStretchFactor(1, 1)
         splitter.addWidget(left_splitter)
 
-        # === 右侧：搜索 + 季度标签 ===
-        season_group = QGroupBox("📺 季度列表")
-        season_main_layout = QVBoxLayout(season_group)
+        # === 右侧：搜索 + TMDB 数据 ===
+        self.season_group = QGroupBox("📺 TMDB 数据")
+        season_main_layout = QVBoxLayout(self.season_group)
         season_main_layout.setSpacing(8)
 
         # 搜索行 - 始终在最上面
         search_row = QHBoxLayout()
+        search_row.setSpacing(6)
+        
+        # 搜索类型切换按钮 - 使用分段控件样式
+        self.search_type_btn = QPushButton("📺 TV 动画")
+        self.search_type_btn.setCheckable(True)
+        self.search_type_btn.setChecked(True)
+        self.search_type_btn.setFixedWidth(110)
+        self.search_type_btn.setCursor(Qt.PointingHandCursor)  # 鼠标悬停显示手型
+        self.search_type_btn.setToolTip("点击切换：TV 动画 / 剧场版")
+        self.search_type_btn.setStyleSheet("""
+            QPushButton:checked {
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                border: 2px solid #1976D2;
+            }
+            QPushButton:!checked {
+                background-color: #E91E63;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                border: 2px solid #C2185B;
+            }
+            QPushButton:hover {
+                border-width: 3px;
+            }
+        """)
+        self.search_type_btn.clicked.connect(self.on_search_type_changed)
+        search_row.addWidget(self.search_type_btn)
+        
+        # 切换提示标签
+        switch_tip = QLabel("← 切换")
+        switch_tip.setStyleSheet("color: #999; font-size: 12px;")
+        search_row.addWidget(switch_tip)
+        
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("输入番剧名称...")
+        self.search_edit.setPlaceholderText("输入动漫名称...")
         self.search_edit.setFixedHeight(28)
         self.search_edit.returnPressed.connect(self.search_and_select)
         search_row.addWidget(self.search_edit)
@@ -1803,7 +2307,7 @@ class MainWindow(QMainWindow):
         self.link_btn.setEnabled(False)
         season_main_layout.addWidget(self.link_btn)
 
-        splitter.addWidget(season_group)
+        splitter.addWidget(self.season_group)
         splitter.setStretchFactor(0, 3)  # 左侧 60%
         splitter.setStretchFactor(1, 2)  # 右侧 40%
 
@@ -2049,7 +2553,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "打开失败", f"无法打开文件夹：{e}")
 
     def search_and_select(self):
-        """搜索并选择番剧"""
+        """搜索并选择番剧/剧场版"""
         api_key = self.config.get('tmdb_api_key')
         if not api_key:
             QMessageBox.warning(self, "警告", "请先在设置中配置 TMDB API Key")
@@ -2062,28 +2566,51 @@ class MainWindow(QMainWindow):
 
         self.tmdb = TMDBClient(api_key)
 
+        # 根据按钮状态确定搜索类型
+        search_type = "tv" if self.search_type_btn.isChecked() else "movie"
+
         # 弹出搜索结果对话框
-        dialog = SearchSelectDialog(self.tmdb, query, self)
+        dialog = SearchSelectDialog(self.tmdb, query, search_type, self)
         result = dialog.exec_()
         if result == QDialog.Accepted and dialog.selected_tv:
-            # 获取详细信息（包含季度列表）
-            tv_id = dialog.selected_tv.get('id')
-            self.tv_info = self.tmdb.get_tv_details(tv_id)
-            if not self.tv_info:
-                QMessageBox.critical(self, "错误", "无法获取番剧详细信息")
-                return
-            tv_name = self.tv_info.get('name', '未知')
-            # 显示番剧名称和 TMDB 链接
-            self.selected_info.setText(f"📺 {tv_name} &nbsp;&nbsp;<a href='https://www.themoviedb.org/tv/{tv_id}' style='color: #03254C; text-decoration: none;'>🔗 TMDB</a>")
-            self._load_season_tabs()
-            self.statusBar.showMessage(f"已选择：{tv_name}")
+            # 清空之前的映射关系
+            self.file_mappings.clear()
+            
+            self.content_type = dialog.selected_type  # "tv" 或 "movie"
+            content_id = dialog.selected_tv.get('id')
+
+            if self.content_type == "tv":
+                # TV 动画：获取季度信息
+                self.tv_info = self.tmdb.get_tv_details(content_id)
+                if not self.tv_info:
+                    QMessageBox.critical(self, "错误", "无法获取番剧详细信息")
+                    return
+                tv_name = self.tv_info.get('name', '未知')
+                self.selected_info.setText(f"📺 {tv_name} &nbsp;&nbsp;<a href='https://www.themoviedb.org/tv/{content_id}' style='color: #03254C; text-decoration: none;'>🔗 TMDB</a>")
+                self._load_season_tabs()
+            else:
+                # 剧场版：获取电影详情
+                self.movie_info = self.tmdb.get_movie_details(content_id)
+                if not self.movie_info:
+                    QMessageBox.critical(self, "错误", "无法获取电影详细信息")
+                    return
+                movie_name = self.movie_info.get('title', '未知')
+                self.selected_info.setText(f"🎬 {movie_name} &nbsp;&nbsp;<a href='https://www.themoviedb.org/movie/{content_id}' style='color: #03254C; text-decoration: none;'>🔗 TMDB</a>")
+                self._load_movie_tab()
+
+            # 刷新左侧文件夹统计
+            self._refresh_all_folders()
+            
+            self.statusBar.showMessage(f"已选择：{tv_name if self.content_type == 'tv' else movie_name}")
 
     def _load_season_tabs(self):
+        """加载 TV 动画的季度标签页"""
         try:
             self.season_tabs_widget.clear()
             self.season_tabs.clear()
             self.file_mappings.clear()
-            
+            self.content_type = "tv"  # 标记当前为 TV 模式
+
             # 先添加 extras 标签页（始终在第一个）
             self.extras_tab = ExtrasTab(self)
             self.season_tabs_widget.addTab(self.extras_tab, "📦 extras")
@@ -2096,7 +2623,7 @@ class MainWindow(QMainWindow):
                 name = season.get('name', f'Season {num}')
                 count = season.get('episode_count', 0)
 
-                tab = SeasonTab(num, name, count, self.tmdb, tv_id, self)  # 传入主窗口引用
+                tab = SeasonTab(num, name, count, self.tmdb, tv_id, self)
                 self.season_tabs[num] = tab
                 self.season_tabs_widget.addTab(tab, f"S{num} ({count}集)")
 
@@ -2106,6 +2633,31 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, "错误", f"加载季度失败：{e}")
+
+    def _load_movie_tab(self):
+        """加载剧场版的单个标签页"""
+        try:
+            self.season_tabs_widget.clear()
+            self.season_tabs.clear()
+            self.file_mappings.clear()
+            self.content_type = "movie"  # 标记当前为剧场版模式
+
+            # 先添加 extras 标签页（始终在第一个）
+            self.extras_tab = ExtrasTab(self)
+            self.season_tabs_widget.addTab(self.extras_tab, "📦 extras")
+
+            # 添加剧场版标签页
+            movie_name = self.movie_info.get('title', '未知')
+            movie_tab = MovieTab(self.tmdb, self.movie_info, self)
+            self.season_tabs['movie'] = movie_tab
+            self.season_tabs_widget.addTab(movie_tab, "🎬 剧场版")
+
+            self.season_tabs_widget.setVisible(True)
+            self.link_btn.setEnabled(True)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "错误", f"加载剧场版失败：{e}")
 
     def _get_folder_videos(self, folder: Path) -> List[Path]:
         """获取文件夹下的所有视频文件（带缓存）"""
@@ -2133,6 +2685,22 @@ class MainWindow(QMainWindow):
 
         # 刷新已展开的文件夹高亮（轻量级操作）
         self._refresh_expanded_folders(specific_paths)
+
+    def _refresh_all_folders(self):
+        """刷新所有文件夹统计和视频列表高亮（重新搜索时调用）"""
+        matched_files = self.get_matched_files()
+        
+        # 刷新所有主文件夹
+        for i in range(self.folder_tree.topLevelItemCount()):
+            parent = self.folder_tree.topLevelItem(i)
+            folder = parent.data(0, Qt.UserRole)
+            if not folder:
+                continue
+            
+            self._refresh_single_folder(folder, matched_files)
+        
+        # 刷新视频列表高亮
+        self._refresh_video_highlight()
 
     def _refresh_expanded_folders(self, specific_paths=None):
         """
@@ -2350,8 +2918,21 @@ class MainWindow(QMainWindow):
                 return
 
             target_path = Path(target)
-            tv_name = self.tv_info.get('name', 'Unknown')
-            year = (self.tv_info.get('first_air_date', '') or '')[:4]
+            
+            # 根据内容类型获取名称和年份
+            if self.content_type == "movie":
+                # 剧场版模式：使用专用目录
+                target_path = Path(self.config.get('movie_target_dir', target))
+                if not target_path or str(target_path) == '':
+                    target_path = Path(target)  # 如果没配置剧场版目录，使用默认目录
+                    
+                # 剧场版模式
+                tv_name = self.movie_info.get('title', 'Unknown')
+                year = (self.movie_info.get('release_date', '') or '')[:4]
+            else:
+                # TV 动画模式
+                tv_name = self.tv_info.get('name', 'Unknown')
+                year = (self.tv_info.get('first_air_date', '') or '')[:4]
 
             success, fail = 0, 0
             fail_details = []  # 记录失败详情
@@ -2388,62 +2969,109 @@ class MainWindow(QMainWindow):
                         unmatched_videos = [v for v in all_videos if v not in matched_paths]
                         extras_files.extend(unmatched_videos)
 
-            # 3. 处理季度文件（重命名 + 字幕）
-            for src, ep_key in self.file_mappings.items():
-                if not src.exists():
-                    fail += 1
-                    continue
+            # 3. 处理正片文件（剧场版和 TV 动画不同处理）
+            if self.content_type == "movie":
+                # === 剧场版模式：直接放入根目录，不带 Season 文件夹 ===
+                movie_folder = target_path / f"{tv_name} ({year})"
+                movie_folder.mkdir(parents=True, exist_ok=True)
 
-                if ep_key == "extras":
-                    continue  # extras 文件稍后处理
+                for src, ep_key in self.file_mappings.items():
+                    if not src.exists():
+                        fail += 1
+                        continue
 
-                s_num = int(ep_key[1:3])
-                folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
-                dst = folder / f"{ep_key} - {src.name}"
+                    if ep_key == "extras":
+                        continue  # extras 文件稍后处理
 
-                # 处理视频文件
-                ok, error = FileOperator.operate(src, dst, mode)
-                if ok:
-                    success += 1
-                else:
-                    fail += 1
-                    fail_details.append((src, dst, error))
-                    continue
+                    # 剧场版命名：多 CD 时在文件名最后添加 -cd1, -cd2 后缀
+                    src_filename = src.stem  # 不含扩展名的文件名
+                    src_suffix = src.suffix  # 扩展名
+                    
+                    if ep_key == "movie":
+                        # 单文件：影片名称 - 原文件名.mkv
+                        dst = movie_folder / f"{tv_name} - {src.name}"
+                    elif ep_key.startswith("movie-cd"):
+                        # 多 CD：影片名称 - 原文件名-cd1.mkv（cd 后缀在扩展名前）
+                        cd_num = ep_key.replace("movie-cd", "")
+                        dst = movie_folder / f"{tv_name} - {src_filename}-cd{cd_num}{src_suffix}"
+                    else:
+                        # 兼容旧格式
+                        dst = movie_folder / f"{tv_name} - {src.name}"
 
-                # 处理关联字幕文件
-                sub_success, sub_fail = self._move_subtitles(src, folder, ep_key, processed_files, mode)
-                success += sub_success
-                for sub_src, sub_dst, error in sub_fail:
-                    fail += 1
-                    fail_details.append((sub_src, sub_dst, error))
-
-            # 4. 处理所有 extras 文件（不重命名）
-            extras_folder = target_path / f"{tv_name} ({year})" / "extras"
-            extras_folder.mkdir(parents=True, exist_ok=True)
-
-            for src in extras_files:
-                if src.exists():
-                    dst = extras_folder / src.name
+                    # 处理视频文件
                     ok, error = FileOperator.operate(src, dst, mode)
                     if ok:
                         success += 1
-                        processed_files.add(src)
-                        # 处理关联字幕文件
-                        sub_success, sub_fail = self._move_subtitles(src, extras_folder, None, processed_files, mode)
-                        success += sub_success
-                        for sub_src, sub_dst, error in sub_fail:
-                            fail += 1
-                            fail_details.append((sub_src, sub_dst, error))
                     else:
                         fail += 1
                         fail_details.append((src, dst, error))
+                        continue
 
-            # 生成.embyignore 文件（如果开启）
-            if self.config.get('embyignore_extras', True) and extras_files:
-                embyignore_file = extras_folder / ".embyignore"
-                if not embyignore_file.exists():
-                    with open(embyignore_file, 'w', encoding='utf-8') as f:
-                        f.write('*')
+                    # 处理关联字幕文件
+                    sub_success, sub_fail = self._move_subtitles(src, movie_folder, None, processed_files, mode)
+                    success += sub_success
+                    for sub_src, sub_dst, error in sub_fail:
+                        fail += 1
+                        fail_details.append((sub_src, sub_dst, error))
+            else:
+                # === TV 动画模式：按季度整理 ===
+                for src, ep_key in self.file_mappings.items():
+                    if not src.exists():
+                        fail += 1
+                        continue
+
+                    if ep_key == "extras":
+                        continue  # extras 文件稍后处理
+
+                    s_num = int(ep_key[1:3])
+                    folder = target_path / f"{tv_name} ({year})" / (f"Season0" if s_num == 0 else f"Season{s_num}")
+                    dst = folder / f"{ep_key} - {src.name}"
+
+                    # 处理视频文件
+                    ok, error = FileOperator.operate(src, dst, mode)
+                    if ok:
+                        success += 1
+                    else:
+                        fail += 1
+                        fail_details.append((src, dst, error))
+                        continue
+
+                    # 处理关联字幕文件
+                    sub_success, sub_fail = self._move_subtitles(src, folder, ep_key, processed_files, mode)
+                    success += sub_success
+                    for sub_src, sub_dst, error in sub_fail:
+                        fail += 1
+                        fail_details.append((sub_src, sub_dst, error))
+
+            # 4. 处理所有 extras 文件（不重命名）
+            if extras_files:
+                # 只有在有 extras 文件时才创建文件夹
+                extras_folder = target_path / f"{tv_name} ({year})" / "extras"
+                extras_folder.mkdir(parents=True, exist_ok=True)
+
+                for src in extras_files:
+                    if src.exists():
+                        dst = extras_folder / src.name
+                        ok, error = FileOperator.operate(src, dst, mode)
+                        if ok:
+                            success += 1
+                            processed_files.add(src)
+                            # 处理关联字幕文件
+                            sub_success, sub_fail = self._move_subtitles(src, extras_folder, None, processed_files, mode)
+                            success += sub_success
+                            for sub_src, sub_dst, error in sub_fail:
+                                fail += 1
+                                fail_details.append((sub_src, sub_dst, error))
+                        else:
+                            fail += 1
+                            fail_details.append((src, dst, error))
+
+                # 生成.embyignore 文件（如果开启）
+                if self.config.get('embyignore_extras', True):
+                    embyignore_file = extras_folder / ".embyignore"
+                    if not embyignore_file.exists():
+                        with open(embyignore_file, 'w', encoding='utf-8') as f:
+                            f.write('*')
 
             # 收集未整理的文件（根据开关配置）
             unorganized_files = []
@@ -2468,14 +3096,14 @@ class MainWindow(QMainWindow):
                         anime_folders.add(anime_folder)
                     except ValueError:
                         continue
-                
+
                 # 扫描每个动漫文件夹中的所有文件
                 for anime_folder in anime_folders:
                     # 先添加重名失败的文件（标红置顶）
                     for dup_file in duplicate_files:
                         if dup_file.is_relative_to(anime_folder):
                             unorganized_files.append((dup_file, True))
-                    
+
                     # 再添加普通未整理文件
                     for f in anime_folder.rglob('*'):
                         if f.is_file():
@@ -2483,9 +3111,8 @@ class MainWindow(QMainWindow):
                                 unorganized_files.append((f, False))
 
             # 显示完成弹窗
-            mode_names = {'link': '硬链接', 'cut': '剪切', 'copy': '复制'}
             mode_name = mode_names.get(mode, '硬链接')
-            
+
             dialog = OrganizeResultDialog(success, fail, unorganized_files, mode_name, self)
             if dialog.exec_() == QDialog.Accepted:
                 selected_files = dialog.selected_files
@@ -2515,7 +3142,7 @@ class MainWindow(QMainWindow):
 
             # 不清空映射，保持按钮可用（用户可以修改映射后重新整理，或整理下一个动漫）
             # 搜索新番剧时 _load_season_tabs() 会自动清空映射
-            
+
         except Exception as e:
             import traceback
             error_msg = traceback.format_exc()
@@ -2528,7 +3155,18 @@ class MainWindow(QMainWindow):
             dialog.save()
             if self.config.get('tmdb_api_key'):
                 self.tmdb = TMDBClient(self.config.get('tmdb_api_key'))
-    
+
+    def on_search_type_changed(self):
+        """搜索类型按钮切换"""
+        if self.search_type_btn.isChecked():
+            self.search_type_btn.setText("📺 TV 动画")
+            self.search_type_btn.setToolTip("当前：TV 动画模式，点击切换到剧场版")
+            self.search_edit.setPlaceholderText("输入动漫名称...")
+        else:
+            self.search_type_btn.setText("🎬 剧场版")
+            self.search_type_btn.setToolTip("当前：剧场版模式，点击切换到 TV 动画")
+            self.search_edit.setPlaceholderText("输入剧场版名称...")
+
     def on_auto_extras_changed(self, state):
         """auto_extras 开关状态变化"""
         self.config.set('auto_extras', state == Qt.Checked, save_later=True)
@@ -2613,7 +3251,18 @@ class ConfigDialog(QDialog):
         tl.setContentsMargins(0,0,0,0)
         tl.addWidget(self.target_edit)
         tl.addWidget(target_btn)
-        form.addRow("目标目录:", tw)
+        form.addRow("目标目录 (TV 动画):", tw)
+
+        self.movie_target_edit = QLineEdit(config.get('movie_target_dir'))
+        self.movie_target_edit.setPlaceholderText("不配置则使用 TV 动画目录")
+        movie_target_btn = QPushButton("浏览...")
+        movie_target_btn.clicked.connect(lambda: self._browse(self.movie_target_edit))
+        mtw = QWidget()
+        mtl = QHBoxLayout(mtw)
+        mtl.setContentsMargins(0,0,0,0)
+        mtl.addWidget(self.movie_target_edit)
+        mtl.addWidget(movie_target_btn)
+        form.addRow("剧场版目录:", mtw)
 
         self.api_edit = QLineEdit(config.get('tmdb_api_key'))
         form.addRow("TMDB API Key:", self.api_edit)
@@ -2662,6 +3311,7 @@ class ConfigDialog(QDialog):
     def save(self):
         self.config.set('source_dir', self.source_edit.text())
         self.config.set('target_dir', self.target_edit.text())
+        self.config.set('movie_target_dir', self.movie_target_edit.text())
         self.config.set('tmdb_api_key', self.api_edit.text())
         self.config.set('move_mode', self.mode_combo.currentData())
         # 解析视频格式配置
