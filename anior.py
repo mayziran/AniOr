@@ -1627,13 +1627,20 @@ class MainWindow(QMainWindow):
         refresh_btn = QPushButton("🔄 刷新文件夹")
         refresh_btn.clicked.connect(self.load_anime_folders)
         tl.addWidget(refresh_btn)
-        
+
         self.refresh_video_btn = QPushButton("🔄 刷新该文件夹视频列表")
         self.refresh_video_btn.clicked.connect(self.on_refresh_video_clicked)
         self.refresh_video_btn.setEnabled(False)
         tl.addWidget(self.refresh_video_btn)
-        
+
         tl.addStretch()
+
+        # extras 视频开关
+        self.auto_extras_check = QCheckBox("📦 未匹配视频整理到 extras")
+        self.auto_extras_check.setChecked(self.config.get('auto_extras', True))
+        self.auto_extras_check.stateChanged.connect(self.on_auto_extras_changed)
+        self.auto_extras_check.setStyleSheet("QCheckBox { color: #333; font-weight: bold; }")
+        tl.addWidget(self.auto_extras_check)
 
         config_btn = QPushButton("⚙️ 设置")
         config_btn.clicked.connect(self.open_config)
@@ -2512,6 +2519,10 @@ class MainWindow(QMainWindow):
             dialog.save()
             if self.config.get('tmdb_api_key'):
                 self.tmdb = TMDBClient(self.config.get('tmdb_api_key'))
+    
+    def on_auto_extras_changed(self, state):
+        """auto_extras 开关状态变化"""
+        self.config.set('auto_extras', state == Qt.Checked, save_later=True)
 
     def closeEvent(self, event):
         # 使用 Qt 标准方式保存窗口状态
@@ -2613,16 +2624,6 @@ class ConfigDialog(QDialog):
         ext_tip.setStyleSheet("color: #666; font-size: 12px;")
         form.addRow("", ext_tip)
 
-        # 未匹配文件配置
-        self.extras_check = QCheckBox("整理到 extras 文件夹")
-        self.extras_check.setChecked(config.get('auto_extras', True))
-        form.addRow("未匹配文件:", self.extras_check)
-
-        # 未匹配文件说明
-        extras_tip = QLabel("开启后，未匹配的视频文件会自动移动到 extras 文件夹")
-        extras_tip.setStyleSheet("color: #666; font-size: 12px;")
-        form.addRow("", extras_tip)
-
         # embyignore 配置
         self.embyignore_check = QCheckBox("生成.embyignore 文件")
         self.embyignore_check.setChecked(config.get('embyignore_extras', True))
@@ -2656,8 +2657,6 @@ class ConfigDialog(QDialog):
         exts = [ext.strip().lower() for ext in re.split(r'[,\s]+', ext_text) if ext.strip()]
         if exts:
             self.config.set('video_extensions', exts)
-        # 保存 auto_extras 配置
-        self.config.set('auto_extras', self.extras_check.isChecked())
         # 保存 embyignore_extras 配置
         self.config.set('embyignore_extras', self.embyignore_check.isChecked())
         self.config.save()
