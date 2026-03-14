@@ -2894,6 +2894,56 @@ class MainWindow(QMainWindow):
 
         return success, fail_details
 
+    def _move_subtitles_for_movie(self, video_src: Path, target_folder: Path, video_dst_name: str, processed_files: set, mode: str) -> Tuple[int, List[Tuple[Path, Path, str]]]:
+        """
+        处理剧场版视频文件关联的字幕文件（跟随影片重命名）
+
+        Args:
+            video_src: 视频文件路径
+            target_folder: 目标文件夹
+            video_dst_name: 视频目标文件名（如 "影片名 - 原文件名.mkv"）
+            processed_files: 已处理文件集合
+            mode: 整理模式
+
+        Returns:
+            (success_count, fail_details) 元组
+            - success_count: 成功处理的字幕数量
+            - fail_details: 失败详情列表 [(src, dst, error), ...]
+        """
+        success = 0
+        fail_details = []
+
+        video_filename = video_src.stem
+        video_parent = video_src.parent
+
+        # 计算字幕目标文件名前缀（去掉视频扩展名）
+        # 例如：视频目标 "影片名 - 原文件名.mkv" → 字幕前缀 "影片名 - 原文件名"
+        dst_prefix = Path(video_dst_name).stem
+
+        # 收集关联字幕文件
+        sub_files_to_move = []
+        for f in video_parent.iterdir():
+            if f.is_file() and f.name.startswith(f"{video_filename}.") and f != video_src:
+                if f.suffix.lower() in Config.SUBTITLE_EXTENSIONS:
+                    if f not in processed_files:
+                        sub_files_to_move.append(f)
+
+        # 处理字幕文件
+        for sub_src in sub_files_to_move:
+            sub_filename = sub_src.name
+            sub_suffix = sub_src.suffix
+            sub_dst_name = f"{dst_prefix}{sub_suffix}"
+            sub_dst = target_folder / sub_dst_name
+
+            ok, error = FileOperator.operate(sub_src, sub_dst, mode)
+            if ok:
+                success += 1
+                processed_files.add(sub_src)
+            else:
+                fail_details.append((sub_src, sub_dst, error))
+
+        return success, fail_details
+
     def start_link(self):
         try:
             # 收集所有映射
@@ -2990,16 +3040,19 @@ class MainWindow(QMainWindow):
                     src_filename = src.stem  # 不含扩展名的文件名
                     src_suffix = src.suffix  # 扩展名
                     
+                    # 计算视频目标文件名
                     if ep_key == "movie":
                         # 单文件：影片名称 - 原文件名.mkv
-                        dst = movie_folder / f"{tv_name} - {src.name}"
+                        video_dst_name = f"{tv_name} - {src.name}"
                     elif ep_key.startswith("movie-cd"):
                         # 多 CD：影片名称 - 原文件名-cd1.mkv（cd 后缀在扩展名前）
                         cd_num = ep_key.replace("movie-cd", "")
-                        dst = movie_folder / f"{tv_name} - {src_filename}-cd{cd_num}{src_suffix}"
+                        video_dst_name = f"{tv_name} - {src_filename}-cd{cd_num}{src_suffix}"
                     else:
                         # 兼容旧格式
-                        dst = movie_folder / f"{tv_name} - {src.name}"
+                        video_dst_name = f"{tv_name} - {src.name}"
+
+                    dst = movie_folder / video_dst_name
 
                     # 处理视频文件
                     ok, error = FileOperator.operate(src, dst, mode)
@@ -3010,8 +3063,10 @@ class MainWindow(QMainWindow):
                         fail_details.append((src, dst, error))
                         continue
 
-                    # 处理关联字幕文件
-                    sub_success, sub_fail = self._move_subtitles(src, movie_folder, None, processed_files, mode)
+                    # 处理关联字幕文件（跟随影片重命名）
+                    sub_success, sub_fail = self._move_subtitles_for_movie(
+                        src, movie_folder, video_dst_name, processed_files, mode
+                    )
                     success += sub_success
                     for sub_src, sub_dst, error in sub_fail:
                         fail += 1
