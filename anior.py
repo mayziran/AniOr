@@ -3069,8 +3069,8 @@ class MainWindow(QMainWindow):
                             fail += 1
                             fail_details.append((src, dst, error))
 
-                # 生成.embyignore 文件（如果开启）
-                if self.config.get('embyignore_extras', True):
+                # 生成.embyignore 文件（如果开启，仅对 TV 动画生效）
+                if self.config.get('embyignore_extras', True) and self.content_type != "movie":
                     embyignore_file = extras_folder / ".embyignore"
                     if not embyignore_file.exists():
                         with open(embyignore_file, 'w', encoding='utf-8') as f:
@@ -3295,7 +3295,7 @@ class ConfigDialog(QDialog):
         form.addRow("extras 忽略:", self.embyignore_check)
 
         # embyignore 说明
-        embyignore_tip = QLabel("在 extras 文件夹生成.embyignore 文件，让 Emby 忽略该文件夹")
+        embyignore_tip = QLabel("在 extras 文件夹生成.embyignore 文件，让 Emby 忽略该文件夹（仅对 TV 动漫生效）")
         embyignore_tip.setStyleSheet("color: #666; font-size: 12px;")
         form.addRow("", embyignore_tip)
 
