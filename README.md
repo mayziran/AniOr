@@ -39,6 +39,12 @@ pip install -r requirements.txt
 python anior.py
 ```
 
+### 方法三：Docker 部署
+
+如需在服务器上运行Docker 部署，请使用 Docker 版本：
+
+**[AniOr-web](https://github.com/mayziran/AniOr-web)** - 提供 Web 界面，可通过浏览器访问使用。
+
 ## 使用说明
 
 ### 1. 首次配置
