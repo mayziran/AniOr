@@ -1534,6 +1534,8 @@ class SeasonTab(QWidget):
     def __init__(self, season_num: int, season_name: str, episode_count: int, tmdb: TMDBClient, tv_id: int, parent_window=None):
         super().__init__()
         self.season_num = season_num
+        self.season_name = season_name
+        self.episode_count = episode_count  # 总集数
         self.tmdb = tmdb
         self.tv_id = tv_id
         self.parent_window = parent_window
@@ -1788,6 +1790,7 @@ class SeasonTab(QWidget):
                             row.setAcceptDrops(True)
 
             self._update_buttons()
+            self.update_tab_title()
             # 通知主窗口刷新高亮
             if self.parent_window:
                 self.parent_window._update_status()
@@ -1854,6 +1857,7 @@ class SeasonTab(QWidget):
             self.file_mappings[path] = key
 
         self._update_buttons()
+        self.update_tab_title()
         if self.parent_window:
             self.parent_window._update_status(new_paths)
 
@@ -1876,6 +1880,7 @@ class SeasonTab(QWidget):
         # 如果单集取消了，批量列表里有这个文件，要重新计算集号
         self._sync_batch_from_mappings()
         self._update_buttons()
+        self.update_tab_title()
         if self.parent_window:
             self.parent_window._update_status(old_paths)
 
@@ -1920,6 +1925,7 @@ class SeasonTab(QWidget):
         # 更新批量列表显示
         self._refresh_match_list()
         self._update_buttons()
+        self.update_tab_title()
 
         # 通知主窗口刷新高亮（实时高亮）
         if self.parent_window:
@@ -1943,6 +1949,7 @@ class SeasonTab(QWidget):
             self.batch_status.setText("")
         else:
             self._refresh_match_list()
+        self.update_tab_title()
 
     def _clear_episode_status(self):
         """清空所有单集行的状态显示"""
@@ -1957,6 +1964,16 @@ class SeasonTab(QWidget):
         """更新按钮显示状态"""
         has_any = bool(self.file_mappings)
         self.clear_all_btn.setVisible(has_any)
+
+    def update_tab_title(self):
+        """更新季度标签标题显示匹配进度（只在需要时调用，避免频繁刷新）"""
+        if self.parent_window and hasattr(self.parent_window, 'season_tabs_widget') and self.parent_window.season_tabs_widget:
+            matched_count = len(self.file_mappings)
+            total_count = self.episode_count
+            new_title = f"S{self.season_num} ({matched_count}/{total_count})"
+            index = self.parent_window.season_tabs_widget.indexOf(self)
+            if index >= 0:
+                self.parent_window.season_tabs_widget.setTabText(index, new_title)
 
     def clear_all_matches(self):
         """清空所有匹配"""
@@ -1976,6 +1993,9 @@ class SeasonTab(QWidget):
         self._clear_episode_status()
         self.clear_all_btn.setVisible(False)
 
+        # 更新季度标签标题
+        self.update_tab_title()
+
         if self.parent_window:
             self.parent_window._update_status()
 
@@ -1990,6 +2010,7 @@ class SeasonTab(QWidget):
         if not self.batch_paths:
             self.match_list_widget.setVisible(False)
             self._update_buttons()
+            self.update_tab_title()
             return
 
         # 添加匹配项（集号根据索引动态计算）
@@ -2001,6 +2022,7 @@ class SeasonTab(QWidget):
         self.match_list_widget.setVisible(True)
         self.batch_status.setText(f"✓ 已匹配 {len(self.batch_paths)} 个文件 - 可拖动右侧调整顺序")
         self._update_buttons()
+        self.update_tab_title()
 
     def remove_match_item(self, item):
         """删除匹配项 - 从 file_mappings 移除"""
@@ -2012,6 +2034,7 @@ class SeasonTab(QWidget):
             self.batch_paths.pop(idx)
             self._refresh_match_list()
             self._update_buttons()
+            self.update_tab_title()
             if self.parent_window:
                 self.parent_window._update_status()
 
@@ -2027,9 +2050,10 @@ class SeasonTab(QWidget):
                 ep_num = idx + 1
                 key = f"S{self.season_num:02d}E{ep_num:02d}"
                 self.file_mappings[path] = key
-            
+
             self._refresh_match_list()
             self._update_buttons()
+            self.update_tab_title()
             if self.parent_window:
                 self.parent_window._update_status()
 
@@ -2628,7 +2652,7 @@ class MainWindow(QMainWindow):
 
                 tab = SeasonTab(num, name, count, self.tmdb, tv_id, self)
                 self.season_tabs[num] = tab
-                self.season_tabs_widget.addTab(tab, f"S{num} ({count}集)")
+                self.season_tabs_widget.addTab(tab, f"S{num} (0/{count})")
 
             self.season_tabs_widget.setVisible(True)
             self.link_btn.setEnabled(True)
