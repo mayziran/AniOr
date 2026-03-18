@@ -3380,6 +3380,25 @@ class ConfigDialog(QDialog):
 
         layout.addLayout(form)
 
+        # GitHub 按钮
+        github_btn = QPushButton("🐙 GitHub")
+        github_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/mayziran/AniOr")))
+        github_btn.setFixedWidth(100)
+        github_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #24292e;
+                color: white;
+                border: none;
+                padding: 6px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #2f363d;
+            }
+        """)
+        layout.addWidget(github_btn, alignment=Qt.AlignCenter)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
