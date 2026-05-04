@@ -2954,9 +2954,8 @@ class MainWindow(QMainWindow):
 
         # 处理字幕文件
         for sub_src in sub_files_to_move:
-            sub_filename = sub_src.name
-            sub_suffix = sub_src.suffix
-            sub_dst_name = f"{dst_prefix}{sub_suffix}"
+            sub_tail = sub_src.name[len(video_filename):]
+            sub_dst_name = f"{dst_prefix}{sub_tail}"
             sub_dst = target_folder / sub_dst_name
 
             ok, error = FileOperator.operate(sub_src, sub_dst, mode)
